@@ -545,7 +545,7 @@ def run_lstm_training(
     执行完整的LSTM模型训练流程
     
     参数:
-        selected_features: 选择的特征列表
+        selected_features: 选择的特征列表或特征选择结果字典
         df: 输入数据DataFrame
         sequence_length: 序列长度
         train_test_ratio: 训练集比例
@@ -569,9 +569,15 @@ def run_lstm_training(
     else:
         progress_bar = None
         status_text = None
+        
+    # 处理selected_features参数，支持新旧两种结构
+    if isinstance(selected_features, dict) and 'selected_features' in selected_features:
+        feature_list = selected_features['selected_features']
+    else:
+        feature_list = selected_features
     
     # 提取选定的特征
-    feature_data = df[selected_features].values
+    feature_data = df[feature_list].values
     target_data = df['Close'].values.reshape(-1, 1) if 'Close' in df.columns else df[df.columns[0]].values.reshape(-1, 1)
     
     # 数据归一化
@@ -689,7 +695,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         p_value_threshold: P值阈值
         
     Returns:
-        selected_features: 筛选后的特征列表
+        dict: 包含筛选结果和数据的字典
     """
     try:
         # 确保数据是数值类型
@@ -709,23 +715,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
             'Feature': target_corr_sorted.index,
             'Correlation': target_corr_sorted.values
         })
-        
-        # 显示相关性分析结果
-        with st.expander("**相关性筛选**", expanded=False):
-            st.write("特征与目标变量的相关性分析")
-            st.dataframe(corr_data)
-            create_correlation_bar_chart(corr_data, correlation_threshold)
             
-            # 只显示筛选出的特征的相关性热力图
-            if high_correlation_features:
-                selected_corr_matrix = corr_matrix.loc[high_correlation_features, high_correlation_features]
-                # 按照原始相关性值排序
-                sorted_features = target_corr_sorted[target_corr_sorted.index.isin(high_correlation_features)].index
-                selected_corr_matrix = selected_corr_matrix.loc[sorted_features, sorted_features]
-                create_correlation_heatmap(selected_corr_matrix)
-            
-            st.write(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
-        
         # 2. VIF分析 - 独立评估所有特征
         # 基于所有数值特征进行VIF分析，包括目标变量
         vif_features = numeric_df.columns.tolist()
@@ -789,30 +779,10 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                 
                 # 获取VIF低于阈值的特征
                 low_vif_features = vif_data[vif_data["VIF"] < vif_threshold]["Feature"].tolist()
-                
-                # 显示VIF筛选结果
-                with st.expander("**VIF筛选**", expanded=False):
-                    # 收集所有警告信息
-                    warning_messages = []
-                    if collinear_features:
-                        warning_messages.append(f"- 以下特征存在完全共线性或VIF值异常大：{', '.join(collinear_features)}")
-                    warning_messages.extend([f"- {warning}" for warning in vif_warnings])
-                    
-                    # 如果有警告信息，显示在一个warning框中
-                    if warning_messages:
-                        st.warning("VIF分析过程中发现以下问题：\n" + "\n".join(warning_messages))
-                    
-                    st.dataframe(vif_data)
-                    create_vif_bar_chart(vif_data, vif_threshold)
-                    st.write(f"VIF低于{vif_threshold}的特征: {low_vif_features}")
             else:
                 low_vif_features = vif_features
-                with st.expander("**VIF筛选**", expanded=False):
-                    st.warning("没有足够的特征进行VIF计算")
         else:
             low_vif_features = vif_features
-            with st.expander("**VIF筛选**", expanded=False):
-                st.warning("没有足够的特征进行多重共线性分析")
         
         # 3. 统计显著性分析 - 独立评估所有特征
         significant_features = []
@@ -852,18 +822,9 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                     'P值': p_values.values,
                     'F值': f_values
                 }).sort_values('P值', ascending=True)
-                
-                # 显示统计显著性分析结果
-                with st.expander("**统计显著性筛选**", expanded=False):
-                    st.write("统计显著性分析")
-                    st.dataframe(sig_data)
-                    create_significance_charts(sig_data, p_value_threshold)
-                    st.write(f"P值低于{p_value_threshold}的特征: {significant_features}")
             except Exception as e:
-                st.warning(f"进行统计显著性分析时出错: {str(e)}")
                 significant_features = X_sig_features
         else:
-            st.warning("没有足够的特征进行统计显著性分析")
             significant_features = X_sig_features
         
         # 4. 整合所有筛选结果 - 取交集
@@ -888,45 +849,43 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                 # 如果所有两两交集也为空，使用相关性结果
                 if not selected_features:
                     selected_features = high_correlation_features
-                    st.warning("所有筛选方法的交集为空，使用相关性筛选结果作为最终特征集")
         else:
             # 如果任一筛选方法结果为空，使用相关性结果
             selected_features = high_correlation_features if high_correlation_features else numeric_df.columns.tolist()
-            st.warning("至少一种筛选方法未返回结果，使用相关性筛选结果或所有特征作为最终特征集")
         
         # 5. 确保目标变量在特征集中
         if 'Close' not in selected_features:
             selected_features.append('Close')
-            st.info("已将目标变量 'Close' 添加到特征集中")
         
-        # 6. 在UI上显示最终筛选结果
-        st.success(f"特征筛选完成！从 {df.shape[1]} 个特征中选出 {len(selected_features)} 个特征：{selected_features}")
-        
-        # 7. 保存筛选参数和详细信息到session state
-        st.session_state['feature_filter_params'] = {
-            'correlation_threshold': correlation_threshold,
-            'vif_threshold': vif_threshold,
-            'p_value_threshold': p_value_threshold
+        # 返回所有筛选结果和数据
+        return {
+            'selected_features': selected_features,
+            'correlation': {
+                'data': corr_data,
+                'features': high_correlation_features,
+                'matrix': corr_matrix
+            },
+            'vif': {
+                'data': vif_data,
+                'features': low_vif_features,
+                'warnings': vif_warnings,
+                'collinear_features': collinear_features if 'collinear_features' in locals() else []
+            },
+            'significance': {
+                'data': sig_data,
+                'features': significant_features
+            }
         }
-        
-        st.session_state['feature_filter_details'] = {
-            'correlation': {'data': corr_data, 'features': high_correlation_features},
-            'vif': {'data': vif_data, 'features': low_vif_features},
-            'significance': {'data': sig_data, 'features': significant_features},
-            'final': {'features': selected_features}
-        }
-        
-        return selected_features
         
     except Exception as e:
-        st.error(f"特征选择过程中发生错误: {str(e)}")
         import traceback
-        st.code(traceback.format_exc())
-        # 返回一个基本的特征集作为后备
-        if 'Close' in df.columns:
-            return ['Close'] + [col for col in df.columns if col != 'Close'][:5]
-        else:
-            return df.columns.tolist()[:6]
+        error_traceback = traceback.format_exc()
+        # 返回错误信息
+        return {
+            'error': str(e),
+            'traceback': error_traceback,
+            'selected_features': ['Close'] + [col for col in df.columns if col != 'Close'][:5] if 'Close' in df.columns else df.columns.tolist()[:6]
+        }
 
 def create_correlation_bar_chart(corr_data, threshold):
     """

@@ -161,29 +161,114 @@ with middle_column:
                     help="统计显著性的最大允许p值"
                 )
 
-            # 添加特征筛选按钮
+            # 特征筛选按钮和展示部分代码
             if st.button("筛选特征"):
                 with st.spinner("正在筛选特征..."):
-                    filtered_features = select_features(
+                    # 调用select_features函数并获取结果
+                    filter_results = select_features(
                         df,
                         correlation_threshold=correlation_threshold,
                         vif_threshold=vif_threshold,
                         p_value_threshold=p_value_threshold
                     )
                     
-                # 更新session state中的筛选特征
-                if filtered_features and len(filtered_features) > 0:
-                    st.session_state['filtered_features'] = filtered_features
-                    # 同时更新选择的特征，使界面上的多选框也更新
-                    st.session_state['selected_features'] = filtered_features
-                    # 标记已经完成筛选
-                    st.session_state['filter_applied'] = True
-                else:
-                    st.error("特征筛选失败，将使用所有特征")
-                    st.session_state['filtered_features'] = all_features
-                    st.session_state['selected_features'] = all_features
-                    st.session_state['filter_applied'] = False
-            
+                    # 检查是否有错误
+                    if 'error' in filter_results:
+                        st.error(f"特征选择过程中发生错误: {filter_results['error']}")
+                        st.code(filter_results['traceback'])
+                        filtered_features = filter_results['selected_features']
+                    else:
+                        # 从结果中获取筛选后的特征列表
+                        filtered_features = filter_results['selected_features']
+                        
+                        # 在UI上显示相关性分析结果
+                        with st.expander("**相关性筛选**", expanded=False):
+                            st.write("特征与目标变量的相关性分析")
+                            corr_data = filter_results['correlation']['data']
+                            high_correlation_features = filter_results['correlation']['features']
+                            corr_matrix = filter_results['correlation']['matrix']
+                            
+                            st.dataframe(corr_data)
+                            create_correlation_bar_chart(corr_data, correlation_threshold)
+                            
+                            # 只显示筛选出的特征的相关性热力图
+                            if high_correlation_features:
+                                selected_corr_matrix = corr_matrix.loc[high_correlation_features, high_correlation_features]
+                                # 按照原始相关性值排序
+                                sorted_features = corr_data['Feature'][corr_data['Feature'].isin(high_correlation_features)]
+                                selected_corr_matrix = selected_corr_matrix.loc[sorted_features, sorted_features]
+                                create_correlation_heatmap(selected_corr_matrix)
+                            
+                            st.write(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
+                        
+                        # 在UI上显示VIF分析结果
+                        with st.expander("**VIF筛选**", expanded=False):
+                            vif_data = filter_results['vif']['data']
+                            low_vif_features = filter_results['vif']['features']
+                            vif_warnings = filter_results['vif']['warnings']
+                            collinear_features = filter_results['vif']['collinear_features']
+                            
+                            # 收集所有警告信息
+                            warning_messages = []
+                            if collinear_features:
+                                warning_messages.append(f"- 以下特征存在完全共线性或VIF值异常大：{', '.join(collinear_features)}")
+                            warning_messages.extend([f"- {warning}" for warning in vif_warnings])
+                            
+                            # 如果有警告信息，显示在一个warning框中
+                            if warning_messages:
+                                st.warning("VIF分析过程中发现以下问题：\n" + "\n".join(warning_messages))
+                            
+                            # 检查vif_data是否为空
+                            if not vif_data.empty:
+                                st.dataframe(vif_data)
+                                create_vif_bar_chart(vif_data, vif_threshold)
+                                st.write(f"VIF低于{vif_threshold}的特征: {low_vif_features}")
+                            else:
+                                st.warning("没有足够的特征进行VIF计算或多重共线性分析")
+                        
+                        # 在UI上显示统计显著性分析结果
+                        with st.expander("**统计显著性筛选**", expanded=False):
+                            sig_data = filter_results['significance']['data']
+                            significant_features = filter_results['significance']['features']
+                            
+                            st.write("统计显著性分析")
+                            if not sig_data.empty:
+                                st.dataframe(sig_data)
+                                create_significance_charts(sig_data, p_value_threshold)
+                                st.write(f"P值低于{p_value_threshold}的特征: {significant_features}")
+                            else:
+                                st.warning("没有足够的特征进行统计显著性分析")
+                        
+                        # 在UI上显示最终筛选结果
+                        st.success(f"特征筛选完成！从 {df.shape[1]} 个特征中选出 {len(filtered_features)} 个特征：{filtered_features}")
+                        
+                        # 保存筛选参数和详细信息到session state
+                        st.session_state['feature_filter_params'] = {
+                            'correlation_threshold': correlation_threshold,
+                            'vif_threshold': vif_threshold,
+                            'p_value_threshold': p_value_threshold
+                        }
+                        
+                        st.session_state['feature_filter_details'] = {
+                            'correlation': {'data': corr_data, 'features': high_correlation_features},
+                            'vif': {'data': vif_data, 'features': low_vif_features},
+                            'significance': {'data': sig_data, 'features': significant_features},
+                            'final': {'features': filtered_features}
+                        }
+                        
+                        # 更新session state中的筛选特征
+                        if filtered_features and len(filtered_features) > 0:
+                            st.session_state['filtered_features'] = filtered_features
+                            # 同时更新选择的特征，使界面上的多选框也更新
+                            st.session_state['selected_features'] = filtered_features
+                            # 标记已经完成筛选
+                            st.session_state['filter_applied'] = True
+                        else:
+                            st.error("特征筛选失败，将使用所有特征")
+                            st.session_state['filtered_features'] = all_features
+                            st.session_state['selected_features'] = all_features
+                            st.session_state['filter_applied'] = False
+                    
             # 特征选择多选框，使用session state中的特征作为默认值
             st.markdown("### 选择训练特征")
             selected_features = st.multiselect(
