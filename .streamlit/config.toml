@@ -1,0 +1,35 @@
+[theme]
+# 主色调
+primaryColor = "#FF4B4B"
+# 背景色
+backgroundColor = "#FFFFFF"
+# 次要背景色
+secondaryBackgroundColor = "#F0F2F6"
+# 文本颜色
+textColor = "#262730"
+# 字体
+font = "sans serif"
+
+[server]
+# 启用地址
+address = "localhost"
+# 端口号
+port = 8501
+# 是否自动打开浏览器
+headless = false
+# 启用CORS和XSRF保护
+enableCORS = true
+enableXsrfProtection = true
+
+[browser]
+# 是否自动打开浏览器
+serverAddress = "localhost"
+serverPort = 8501
+
+[global]
+# 是否显示开发者选项
+developmentMode = false
+
+[logger]
+# 日志级别
+level = "info" 

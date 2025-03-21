@@ -1,0 +1,57 @@
+# 股票价格预测系统配置文件
+
+# 基本设置
+basic:
+  data_file: "data/rlData.csv"
+  output_dir: "output"
+  random_seed: 72
+  
+# 数据处理设置
+data_processing:
+  lookback: 20
+  test_size: 0.2
+  feature_selection:
+    correlation_threshold: 0.7
+    vif_threshold: 10
+    use_f_test: true
+    
+# 模型设置
+models:
+  # 单层LSTM设置
+  single_lstm:
+    hidden_dim: 64
+    dropout: 0.2
+    weight_decay: 1e-5
+    
+  # 双层LSTM设置
+  dual_lstm:
+    hidden_dim: 32
+    num_layers: 2
+    dropout: 0.3
+    weight_decay: 1e-5
+    
+  # ARIMA设置
+  arima:
+    max_p: 3
+    max_d: 2
+    max_q: 3
+    criterion: "bic"
+    
+# 训练设置
+training:
+  num_epochs: 100
+  batch_size: 32
+  learning_rate: 0.001
+  num_runs: 30
+  early_stopping:
+    enabled: true
+    patience: 15
+    min_delta: 0.0001
+    
+# 可视化设置
+visualization:
+  style: "seaborn-whitegrid"
+  dpi: 300
+  figsize: [12, 8]
+  cmap: "viridis"
+  font_family: "Times New Roman"
