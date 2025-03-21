@@ -1,4 +1,0 @@
-Best ARIMA Order: (0, 1, 1)
-Best BIC: 837.5972
-Best AIC: 831.4720
-Search Time: 3.36 seconds

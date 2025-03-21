@@ -13,7 +13,7 @@ import torch  # 导入PyTorch，用于解决兼容性问题
 # 修复PyTorch与Streamlit的兼容性问题
 torch.classes.__path__ = []
 
-from utils.session import init_session_state, get_state, set_state, update_status
+from src.utils.session import init_session_state, get_state, set_state, update_status
 
 # 设置页面标题和图标
 st.set_page_config(

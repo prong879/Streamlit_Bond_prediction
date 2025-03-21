@@ -23,7 +23,7 @@ from datetime import datetime  # 导入datetime用于记录时间戳
 import os  # 操作系统接口
 import ta  # 技术分析库，用于计算技术指标
 from streamlit_echarts import st_echarts  # ECharts图表组件
-from utils.session import get_state, set_state  # 状态管理工具
+from src.utils.session import get_state, set_state  # 状态管理工具
 import torch  # 导入PyTorch，用于解决兼容性问题
 
 # 修复PyTorch与Streamlit的兼容性问题

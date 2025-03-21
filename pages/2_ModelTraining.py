@@ -27,7 +27,7 @@ if project_root not in sys.path:
     sys.path.append(project_root)
 
 # 添加arima
-from web.utils.arima_utils import (
+from src.models.arima_model import (
     check_stationarity,
     diff_series,
     check_white_noise,
@@ -42,7 +42,7 @@ from web.utils.arima_utils import (
 )
 
 # 导入LSTM相关函数
-from web.utils.lstm_utils import (
+from src.models.lstm_model import (
     save_model, 
     LSTMModel, 
     train_lstm_model, 
@@ -59,7 +59,7 @@ from web.utils.lstm_utils import (
 
 # 添加session管理函数
 try:
-    from web.utils.session import get_state, set_state, update_states
+    from src.utils.session import get_state, set_state, update_states
 except ImportError:
     # 如果导入失败，创建空函数
     def get_state(key, default=None):

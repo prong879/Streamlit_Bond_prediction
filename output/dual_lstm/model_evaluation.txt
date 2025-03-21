@@ -1,5 +1,0 @@
-Training Set RMSE: 2.7724
-Test Set RMSE: 13.3377
-Training Time: 0.7948 seconds
-Training Set Direction Accuracy: 50.63%
-Test Set Direction Accuracy: 51.28%
