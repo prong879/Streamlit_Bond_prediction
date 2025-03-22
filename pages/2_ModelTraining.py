@@ -103,673 +103,9 @@ if df is None:
     
 tech_indicators = None
 
-# 创建页面的两栏布局，左边显示数据特征和模型信息，右边显示各类模型参数设置与训练控制
-sidebar_col, main_content_col = st.columns([1, 3])
-
-
-# 页面右边栏 - 模型参数设置与训练控制
-with main_content_col:
-    st.subheader("模型参数配置")
-    
-    # 模型类型选择标签页
-    model_tabs = st.tabs(["LSTM", "ARIMA", "Prophet"])
-    
-    # LSTM参数设置
-    with model_tabs[0]:
-        st.markdown("### LSTM模型")
-        
-        # 特征选择部分 - 添加到LSTM标签页内
-        st.markdown("### 特征选择")
-        
-        # 检查技术指标数据是否存在
-        if 'raw_data' in st.session_state:
-            if 'tech_indicators' in st.session_state:
-                df = st.session_state['tech_indicators']  # 使用技术指标数据
-            else:
-                df = st.session_state['raw_data']  # 如果没有技术指标数据，使用原始数据
-            
-            # 确保使用数据中实际存在的列作为特征列表
-            all_features = df.columns.tolist()
-            
-            # 初始化selected_features的session state
-            if 'selected_features' not in st.session_state:
-                st.session_state['selected_features'] = all_features
-            
-            # 特征筛选参数
-            lstm_feat_filter_col1, lstm_feat_filter_col2, lstm_feat_filter_col3 = st.columns(3)
-            with lstm_feat_filter_col1:
-                correlation_threshold = st.slider(
-                    "相关性阈值",
-                    min_value=0.0,
-                    max_value=1.0,
-                    value=0.5,
-                    step=0.05,
-                    help="与目标变量的最小相关系数"
-                )
-            with lstm_feat_filter_col2:
-                vif_threshold = st.slider(
-                    "VIF阈值",
-                    min_value=1.0,
-                    max_value=20.0,
-                    value=10.0,
-                    step=0.5,
-                    help="方差膨胀因子的最大允许值"
-                )
-            with lstm_feat_filter_col3:
-                p_value_threshold = st.slider(
-                    "P值阈值",
-                    min_value=0.0,
-                    max_value=0.1,
-                    value=0.05,
-                    step=0.01,
-                    help="统计显著性的最大允许p值"
-                )
-
-            # 特征筛选按钮和展示部分代码
-            if st.button("筛选特征"):
-                with st.spinner("正在筛选特征..."):
-                    # 调用select_features函数并获取结果
-                    filter_results = select_features(
-                        df,
-                        correlation_threshold=correlation_threshold,
-                        vif_threshold=vif_threshold,
-                        p_value_threshold=p_value_threshold
-                    )
-                    
-                    # 检查是否有错误
-                    if 'error' in filter_results:
-                        st.error(f"特征选择过程中发生错误: {filter_results['error']}")
-                        st.code(filter_results['traceback'])
-                        filtered_features = filter_results['selected_features']
-                    else:
-                        # 从结果中获取筛选后的特征列表
-                        filtered_features = filter_results['selected_features']
-                        
-                        # 在UI上显示相关性分析结果
-                        with st.expander("**相关性筛选**", expanded=False):
-                            st.write("特征与目标变量的相关性分析")
-                            corr_data = filter_results['correlation']['data']
-                            high_correlation_features = filter_results['correlation']['features']
-                            corr_matrix = filter_results['correlation']['matrix']
-                            
-                            # 显示相关性数据表格
-                            st.dataframe(corr_data)
-                            
-                            # 使用create_correlation_bar_chart绘制水平相关性条形图
-                            correlation_bar_option = create_correlation_bar_chart(corr_data, correlation_threshold)
-                            st_echarts(
-                                options=correlation_bar_option, 
-                                height=f"{max(400, len(corr_data) * 35)}px",
-                                width="100%"
-                            )
-                            
-                            # 检查high_correlation_features是否为空
-                            if not high_correlation_features:
-                                st.warning("未找到符合相关性阈值的特征，将显示所有特征的相关性热力图。")
-                                correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
-                            else:
-                                # 显示特征间相关性热力图
-                                st.write("特征间相关性热力图")
-                                correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
-                            
-                            # 显示热力图
-                            st_echarts(
-                                options=correlation_heatmap_option,
-                                height="600px",
-                                width="100%"
-                            )
-                            
-                            st.write(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
-                        
-                        # 在UI上显示VIF分析结果
-                        with st.expander("**VIF筛选**", expanded=False):
-                            vif_data = filter_results['vif']['data']
-                            low_vif_features = filter_results['vif']['features']
-                            vif_warnings = filter_results['vif']['warnings']
-                            collinear_features = filter_results['vif']['collinear_features']
-                            
-                            # 收集所有警告信息
-                            warning_messages = []
-                            if collinear_features:
-                                warning_messages.append(f"- 以下特征存在完全共线性或VIF值异常大：{', '.join(collinear_features)}")
-                            warning_messages.extend([f"- {warning}" for warning in vif_warnings])
-                            
-                            # 如果有警告信息，显示在一个warning框中
-                            if warning_messages:
-                                st.warning("VIF分析过程中发现以下问题：\n" + "\n".join(warning_messages))
-                            
-                            # 检查vif_data是否为空
-                            if not vif_data.empty:
-                                st.dataframe(vif_data)
-                                # 修改为接收返回值并渲染
-                                vif_bar_option = create_vif_bar_chart(vif_data, vif_threshold)
-                                st_echarts(
-                                    options=vif_bar_option, 
-                                    height=f"{max(400, len(vif_data) * 35)}px",
-                                    width="100%"
-                                )
-                                st.write(f"VIF低于{vif_threshold}的特征: {low_vif_features}")
-                            else:
-                                st.warning("没有足够的特征进行VIF计算或多重共线性分析")
-                        
-                        # 在UI上显示统计显著性分析结果
-                        with st.expander("**统计显著性筛选**", expanded=False):
-                            sig_data = filter_results['significance']['data']
-                            significant_features = filter_results['significance']['features']
-                            
-                            st.write("统计显著性分析")
-                            if not sig_data.empty:
-                                st.dataframe(sig_data)
-                                # 修改为接收返回值并渲染
-                                f_score_option, p_value_option = create_significance_charts(sig_data, p_value_threshold)
-                                st_echarts(
-                                    options=f_score_option, 
-                                    height=f"{max(400, len(sig_data) * 35)}px",
-                                    width="100%"
-                                )
-                                st_echarts(
-                                    options=p_value_option, 
-                                    height=f"{max(400, len(sig_data) * 35)}px",
-                                    width="100%"
-                                )
-                                st.write(f"P值低于{p_value_threshold}的特征: {significant_features}")
-                            else:
-                                st.warning("没有足够的特征进行统计显著性分析")
-                        
-                        # 在UI上显示最终筛选结果
-                        st.success(f"特征筛选完成！从 {df.shape[1]} 个特征中选出 {len(filtered_features)} 个特征：{filtered_features}")
-                        
-                        # 保存筛选参数和详细信息到session state
-                        st.session_state['feature_filter_params'] = {
-                            'correlation_threshold': correlation_threshold,
-                            'vif_threshold': vif_threshold,
-                            'p_value_threshold': p_value_threshold
-                        }
-                        
-                        st.session_state['feature_filter_details'] = {
-                            'correlation': {'data': corr_data, 'features': high_correlation_features},
-                            'vif': {'data': vif_data, 'features': low_vif_features},
-                            'significance': {'data': sig_data, 'features': significant_features},
-                            'final': {'features': filtered_features}
-                        }
-                        
-                        # 更新session state中的筛选特征
-                        if filtered_features and len(filtered_features) > 0:
-                            st.session_state['filtered_features'] = filtered_features
-                            # 同时更新选择的特征，使界面上的多选框也更新
-                            st.session_state['selected_features'] = filtered_features
-                            # 标记已经完成筛选
-                            st.session_state['filter_applied'] = True
-                        else:
-                            st.error("特征筛选失败，将使用所有特征")
-                            st.session_state['filtered_features'] = all_features
-                            st.session_state['selected_features'] = all_features
-                            st.session_state['filter_applied'] = False
-                    
-            # 特征选择多选框，使用session state中的特征作为默认值
-            st.markdown("### 选择训练特征")
-            selected_features = st.multiselect(
-                "选择用于训练的特征",
-                options=all_features,
-                default=st.session_state['selected_features']
-            )
-            
-            # 更新selected_features的session state
-            st.session_state['selected_features'] = selected_features
-        
-        # 模型参数设置
-        st.markdown("### 模型参数")
-        
-        lstm_params_left_col, lstm_params_right_col = st.columns(2)
-        with lstm_params_left_col:
-            hidden_size = st.number_input(
-                "隐藏层大小",
-                min_value=1,
-                max_value=512,
-                value=64
-            )
-            
-            num_layers = st.number_input(
-                "LSTM层数",
-                min_value=1,
-                max_value=5,
-                value=2
-            )
-            
-            dropout = st.slider(
-                "Dropout比例",
-                min_value=0.0,
-                max_value=0.9,
-                value=0.2,
-                step=0.1
-            )
-        
-        with lstm_params_right_col:
-            learning_rate = st.number_input(
-                "学习率",
-                min_value=0.0001,
-                max_value=0.1,
-                value=0.001,
-                format="%.4f"
-            )
-            
-            batch_size = st.number_input(
-                "批次大小",
-                min_value=1,
-                max_value=256,
-                value=32
-            )
-            
-            epochs = st.number_input(
-                "训练轮数",
-                min_value=1,
-                max_value=1000,
-                value=100
-            )
-        
-            # 训练控制
-        st.markdown("### 训练控制")
-        
-        lstm_train_btn_col, lstm_early_stop_col = st.columns([3, 1])
-        with lstm_train_btn_col:
-            start_training = st.button(
-                "开始训练",
-                use_container_width=True
-            )
-            
-        with lstm_early_stop_col:
-            enable_early_stopping = st.checkbox(
-                "启用早停",
-                value=True
-            )
-        
-        # 训练进度和损失可视化的占位区域
-        progress_placeholder = st.empty()
-        loss_chart_placeholder = st.empty()
-        
-        # 如果会话中已有训练历史但界面刚刚加载，显示之前的训练历史
-        if 'training_history' in st.session_state and 'training_complete' in st.session_state and st.session_state['training_complete'] and not start_training:
-            history = st.session_state['training_history']
-            with loss_chart_placeholder:
-                # 绘制已有的损失曲线
-                history_df = pd.DataFrame({
-                    '训练损失': history['train_loss'],
-                    '验证损失': history['val_loss']
-                })
-                st.line_chart(history_df)
-        
-        if start_training:
-            with progress_placeholder.container():
-                st.info("训练过程将在这里显示...")
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-            with loss_chart_placeholder.container():
-                # 临时数据用于示例
-                chart_data = pd.DataFrame(
-                    np.random.randn(20, 2),
-                    columns=['训练损失', '验证损失']
-                )
-                st.line_chart(chart_data)
-    
-    # ARIMA参数设置
-    with model_tabs[1]:       
-        # 添加数据预处理部分
-        st.markdown("#### 数据预处理")
-        
-        # 创建两列布局：左侧为控制区域，右侧为数据图表
-        arima_controls_col, arima_charts_col = st.columns([1, 2])
-        
-        with arima_controls_col:
-            # 变量选择框
-            if 'raw_data' in st.session_state and st.session_state['raw_data'] is not None:
-                df = st.session_state['raw_data']
-                
-                # 获取所有列名，排除日期类型的列
-                all_columns = []
-                date_columns = []
-                
-                for col in df.columns:
-                    if pd.api.types.is_datetime64_any_dtype(df[col]):
-                        date_columns.append(col)
-                    else:
-                        all_columns.append(col)
-                
-                # 如果所有列都被排除，给出警告
-                if not all_columns:
-                    st.error("数据中没有可用于分析的非日期类型列")
-                    st.stop()
-                    
-                # 变量选择框
-                selected_var = st.selectbox(
-                    "选择需要分析的变量",
-                    options=all_columns,
-                    index=0,
-                    key="arima_selected_var"
-                )
-                
-                # 获取所选变量的数据
-                selected_data = df[selected_var]
-                
-                # 检查数据类型，处理日期时间类型
-                is_datetime = pd.api.types.is_datetime64_any_dtype(selected_data)
-                is_numeric = pd.api.types.is_numeric_dtype(selected_data)
-                
-                if is_datetime:
-                    st.warning(f"选择的变量 '{selected_var}' 是日期时间类型，将转换为时间戳后进行分析")
-                    # 将日期时间转换为时间戳（浮点数）
-                    selected_data = (selected_data - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
-                    # 显示转换后的数据类型
-                    st.info(f"转换后的数据类型: {selected_data.dtype}")
-                elif not is_numeric:
-                    st.error(f"选择的变量 '{selected_var}' 不是数值类型，无法进行时间序列分析")
-                    st.stop()
-                
-                # 数据处理方法选择
-                transform_method = st.radio(
-                    "数据处理方法",
-                    options=["原始数据", "对数变换", "一阶差分", "一阶对数差分"],
-                    index=0,
-                    key="arima_transform_method"
-                )
-                
-                # 添加执行按钮，点击后更新图表
-                if st.button("更新图表", key="update_arima_charts"):
-                    st.session_state['arima_processed'] = True
-                
-                # 平稳性检验结果显示区域
-                if 'arima_processed' in st.session_state and st.session_state['arima_processed']:                    
-                    # 根据选择的方法进行数据处理
-                    if transform_method == "原始数据":
-                        processed_data = selected_data
-                        transform_title = "原始数据"
-                        
-                        # 执行平稳性检验
-                        stationarity_results, is_stationary, _ = check_stationarity(processed_data)
-                        
-                    elif transform_method == "对数变换":
-                        # 检查是否有非正值
-                        if (selected_data <= 0).any():
-                            st.warning("数据包含非正值，无法进行对数变换")
-                            processed_data = selected_data
-                            transform_title = "原始数据"
-                        else:
-                            processed_data = np.log(selected_data)
-                            transform_title = "对数变换后的数据"
-                        
-                        # 执行平稳性检验
-                        stationarity_results, is_stationary, _ = check_stationarity(processed_data)
-                        
-                    elif transform_method == "一阶差分":
-                        diff_data, _ = diff_series(selected_data, diff_order=1, log_diff=False)
-                        processed_data = diff_data
-                        transform_title = "一阶差分后的数据"
-                        
-                        # 执行平稳性检验
-                        stationarity_results, is_stationary, _ = check_stationarity(processed_data)
-                        
-                    elif transform_method == "一阶对数差分":
-                        # 检查是否有非正值
-                        if (selected_data <= 0).any():
-                            st.warning("数据包含非正值，无法进行对数差分")
-                            processed_data = selected_data
-                            transform_title = "原始数据"
-                        else:
-                            diff_data, _ = diff_series(selected_data, diff_order=1, log_diff=True)
-                            processed_data = diff_data
-                            transform_title = "一阶对数差分后的数据"
-                        
-                        # 执行平稳性检验
-                        stationarity_results, is_stationary, _ = check_stationarity(processed_data)
-                    
-                    # 平稳性检验结果展开框
-                    with st.expander("ADF平稳性检验结果", expanded=True):
-                        
-                        st.metric(
-                            label="ADF统计量",
-                            value=f"{stationarity_results['ADF统计量']:.2f}"
-                        )
-                        st.metric(
-                            label="p值",
-                            value=f" {stationarity_results['p值']:.2f}"
-                        )
-
-                        # 根据p值判断是否平稳
-                        if is_stationary:
-                            st.success("数据序列是平稳的 (p值 < 0.05)")
-                        else:
-                            st.warning("数据序列不是平稳的 (p值 >= 0.05)")
-                    
-                    # 正态性检验结果展开框
-                    with st.expander("正态性检验结果", expanded=True):
-                        # 执行正态性检验 (使用scipy的stats模块)
-                        from scipy import stats
-                        
-                        # 进行Shapiro-Wilk检验
-                        if len(processed_data) < 5000:  # Shapiro-Wilk适用于小样本
-                            stat, p_value = stats.shapiro(processed_data.dropna())
-                            test_name = "Shapiro-Wilk检验"
-                        else:  # 大样本使用K-S检验
-                            stat, p_value = stats.kstest(processed_data.dropna(), 'norm')
-                            test_name = "Kolmogorov-Smirnov检验"
-
-                        st.metric(
-                            label=f"{test_name}统计量",
-                            value=f"{stat:.4f}"
-                        )
-                        st.metric(
-                            label="p值",
-                            value=f"{p_value:.4f}"
-                        )
-
-                        # 根据p值判断是否符合正态分布
-                        if p_value < 0.05:
-                            st.warning(f"数据序列不符合正态分布 (p值 < 0.05)")
-                        else:
-                            st.success(f"数据序列符合正态分布 (p值 >= 0.05)")
-                        
-                        # 保存处理后的数据到会话状态
-                        st.session_state['arima_processed_data'] = processed_data
-                        st.session_state['arima_transform_title'] = transform_title
-
-            else:
-                st.warning("请先在数据查看页面加载数据")
-        
-        with arima_charts_col:
-            # 数据图表显示区域
-            if 'arima_processed' in st.session_state and st.session_state['arima_processed']:
-                if 'arima_processed_data' in st.session_state:
-                    # 获取处理后的数据和标题
-                    processed_data = st.session_state['arima_processed_data']
-                    transform_title = st.session_state['arima_transform_title']
-                    
-                    # 创建折线图
-                    try:
-                        # 创建包含索引的数据框
-                        # 处理差分后数据索引可能与原始数据不同的问题
-                        if transform_method in ["一阶差分", "一阶对数差分"]:
-                            # 对于差分数据，使用差分后的索引
-                            time_series_df = pd.DataFrame({transform_title: processed_data})
-                        else:
-                            # 对于原始数据或对数变换，保持原始索引
-                            time_series_df = pd.DataFrame({transform_title: processed_data}, index=df.index)
-                        
-                        timeseries_option = create_timeseries_chart(
-                            time_series_df,
-                            title=f"{selected_var} - {transform_title}"
-                        )
-                        st_echarts(options=timeseries_option, height="300px")
-                    except Exception as e:
-                        st.error(f"无法绘制时间序列图: {str(e)}")
-                    
-                    # 创建直方图
-                    try:
-                        histogram_option = create_histogram_chart(
-                            processed_data,
-                            title=f"{selected_var} - 分布直方图"
-                        )
-                        st_echarts(options=histogram_option, height="250px")
-                    except Exception as e:
-                        st.error(f"无法绘制分布直方图: {str(e)}")
-                    
-                    # 创建QQ图
-                    try:
-                        qq_option = create_qq_plot(
-                            processed_data,
-                            title=f"{selected_var} - QQ图"
-                        )
-                        st_echarts(options=qq_option, height="400px")
-                    except Exception as e:
-                        st.warning(f"无法绘制QQ图: {str(e)}")
-                        
-
-                else:
-                    st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
-            else:
-                st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
-        
-        # 添加描述性统计表格
-        st.markdown("### 描述性统计")
-        
-        # 保存所有数据序列
-        series_data = {}
-        
-        # 原始数据序列
-        if selected_var in df.columns:
-            original_series = df[selected_var]
-            original_series.name = f"{selected_var}_原始数据"
-            series_data["原始数据"] = original_series
-            
-            # 对数变换序列
-            if (original_series > 0).all():
-                log_series = np.log(original_series)
-                log_series.name = f"{selected_var}_对数变换"
-                series_data["对数变换"] = log_series
-            
-            # 一阶差分序列
-            diff_series_data, _ = diff_series(original_series, diff_order=1, log_diff=False)
-            diff_series_data.name = f"{selected_var}_一阶差分"
-            series_data["一阶差分"] = diff_series_data
-            
-            # 一阶对数差分序列
-            if (original_series > 0).all():
-                log_diff_series, _ = diff_series(original_series, diff_order=1, log_diff=True)
-                log_diff_series.name = f"{selected_var}_一阶对数差分"
-                series_data["一阶对数差分"] = log_diff_series
-        
-        # 生成所有序列的描述性统计表
-        all_stats_dfs = []
-        jb_stats = {}
-        
-        for name, series in series_data.items():
-            try:
-                stats_df, normality_test = generate_descriptive_statistics(series)
-                stats_df['VARIABLES'] = [name]  # 替换为序列名称
-                all_stats_dfs.append(stats_df)
-                jb_stats[name] = {
-                    'JB统计量': normality_test['statistic'],
-                    'p值': normality_test['p_value'],
-                    '是否正态': "是" if normality_test['is_normal'] else "否"
-                }
-            except Exception as e:
-                st.warning(f"无法计算 {name} 的描述性统计: {str(e)}")
-        
-        # 合并所有统计表
-        if all_stats_dfs:
-            combined_stats_df = pd.concat(all_stats_dfs, ignore_index=True)
-            
-            # 表格格式化: 保留小数点位数为3位
-            format_cols = ['mean', 'p50', 'sd', 'min', 'max', 'skewness', 'kurtosis']
-            for col in format_cols:
-                if col in combined_stats_df.columns:
-                    combined_stats_df[col] = combined_stats_df[col].apply(
-                        lambda x: f"{x:.3f}" if pd.notnull(x) else "N/A"
-                    )
-            
-            # 重新排列列顺序以提高可读性
-            ordered_cols = ['VARIABLES', 'N', 'mean', 'p50', 'sd', 'min', 'max', 'skewness', 'kurtosis']
-            ordered_cols = [col for col in ordered_cols if col in combined_stats_df.columns]
-            combined_stats_df = combined_stats_df[ordered_cols]
-            
-            # 设置VARIABLES列为索引，使表格更清晰
-            combined_stats_df = combined_stats_df.set_index('VARIABLES')
-            
-            # 使用st.table而不是st.dataframe，以获得更好的静态表格展示
-            st.table(combined_stats_df)
-        else:
-            st.warning("无法生成描述性统计表")
-        
-        # 然后是原来的ARIMA参数设置部分
-        st.markdown("### ARIMA模型参数")
-        
-        # 添加一个按钮，用于显示ARIMA模型参数的说明
-        arima_params_left_col, arima_params_right_col = st.columns(2)
-        with arima_params_left_col:
-            p_param = st.number_input(
-                "p (AR阶数)",
-                min_value=0,
-                max_value=10,
-                value=2
-            )
-            
-            d_param = st.number_input(
-                "d (差分阶数)",
-                min_value=0,
-                max_value=2,
-                value=1
-            )
-        
-        with arima_params_right_col:
-            q_param = st.number_input(
-                "q (MA阶数)",
-                min_value=0,
-                max_value=10,
-                value=2
-            )
-            
-            seasonal = st.checkbox(
-                "包含季节性成分",
-                value=False
-            )
-    
-    # Prophet参数设置
-    with model_tabs[2]:
-        st.markdown("### Prophet模型参数")
-        
-        prophet_params_left_col, prophet_params_right_col = st.columns(2)
-        with prophet_params_left_col:
-            yearly_seasonality = st.selectbox(
-                "年度季节性",
-                options=["auto", "True", "False"],
-                index=0
-            )
-            
-            weekly_seasonality = st.selectbox(
-                "周度季节性",
-                options=["auto", "True", "False"],
-                index=0
-            )
-        
-        with prophet_params_right_col:
-            daily_seasonality = st.selectbox(
-                "日度季节性",
-                options=["auto", "True", "False"],
-                index=0
-            )
-            
-            changepoint_prior_scale = st.slider(
-                "变点先验比例",
-                min_value=0.001,
-                max_value=0.5,
-                value=0.05,
-                step=0.001,
-                format="%.3f"
-            )
-    
-# 页面左侧栏 - 数据特征、模型信息
-with sidebar_col:
+# 侧边栏内容 - 数据特征、模型信息
+with st.sidebar:
     st.subheader("数据和特征")
-    
     
     # 显示数据基本信息
     with st.expander("数据信息", expanded=True):
@@ -818,7 +154,7 @@ with sidebar_col:
     with st.expander("训练状态", expanded=True):
         if 'training_complete' in st.session_state and st.session_state['training_complete']:
             st.success("模型训练已完成")
-        elif start_training:
+        elif 'start_training' in st.session_state and st.session_state['start_training']:
             st.info("模型训练中...")
         else:
             st.info("等待开始训练...")
@@ -863,11 +199,668 @@ with sidebar_col:
                 label="MAE",
                 value=f"{metrics.get('MAE', 0):.4f}"
             )
-        elif start_training:
+        elif 'start_training' in st.session_state and st.session_state['start_training']:
             st.info("模型评估中...")
         else:
             st.info("训练模型后将显示评估指标")
 
+# 主要内容区域
+
+# 模型类型选择标签页
+model_tabs = st.tabs(["LSTM", "ARIMA", "Prophet"])
+
+# LSTM参数设置
+with model_tabs[0]:
+    
+    # 特征选择部分 - 添加到LSTM标签页内
+    st.markdown("### 特征选择")
+    
+    # 检查技术指标数据是否存在
+    if 'raw_data' in st.session_state:
+        if 'tech_indicators' in st.session_state:
+            df = st.session_state['tech_indicators']  # 使用技术指标数据
+        else:
+            df = st.session_state['raw_data']  # 如果没有技术指标数据，使用原始数据
+        
+        # 确保使用数据中实际存在的列作为特征列表
+        all_features = df.columns.tolist()
+        
+        # 初始化selected_features的session state
+        if 'selected_features' not in st.session_state:
+            st.session_state['selected_features'] = all_features
+        
+        # 特征筛选参数
+        lstm_feat_filter_col1, lstm_feat_filter_col2, lstm_feat_filter_col3 = st.columns(3)
+        with lstm_feat_filter_col1:
+            correlation_threshold = st.slider(
+                "相关性阈值",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                help="与目标变量的最小相关系数"
+            )
+        with lstm_feat_filter_col2:
+            vif_threshold = st.slider(
+                "VIF阈值",
+                min_value=1.0,
+                max_value=20.0,
+                value=10.0,
+                step=0.5,
+                help="方差膨胀因子的最大允许值"
+            )
+        with lstm_feat_filter_col3:
+            p_value_threshold = st.slider(
+                "P值阈值",
+                min_value=0.0,
+                max_value=0.1,
+                value=0.05,
+                step=0.01,
+                help="统计显著性的最大允许p值"
+            )
+
+        # 特征筛选按钮和展示部分代码
+        if st.button("筛选特征"):
+            with st.spinner("正在筛选特征..."):
+                # 调用select_features函数并获取结果
+                filter_results = select_features(
+                    df,
+                    correlation_threshold=correlation_threshold,
+                    vif_threshold=vif_threshold,
+                    p_value_threshold=p_value_threshold
+                )
+                
+                # 检查是否有错误
+                if 'error' in filter_results:
+                    st.error(f"特征选择过程中发生错误: {filter_results['error']}")
+                    st.code(filter_results['traceback'])
+                    filtered_features = filter_results['selected_features']
+                else:
+                    # 从结果中获取筛选后的特征列表
+                    filtered_features = filter_results['selected_features']
+                    
+                    # 在UI上显示相关性分析结果
+                    with st.expander("**相关性筛选**", expanded=False):
+                        st.write("特征与目标变量的相关性分析")
+                        corr_data = filter_results['correlation']['data']
+                        high_correlation_features = filter_results['correlation']['features']
+                        corr_matrix = filter_results['correlation']['matrix']
+                        
+                        # 显示相关性数据表格
+                        st.dataframe(corr_data)
+                        
+                        # 使用create_correlation_bar_chart绘制水平相关性条形图
+                        correlation_bar_option = create_correlation_bar_chart(corr_data, correlation_threshold)
+                        st_echarts(
+                            options=correlation_bar_option, 
+                            height=f"{max(400, len(corr_data) * 35)}px",
+                            width="100%"
+                        )
+                        
+                        # 检查high_correlation_features是否为空
+                        if not high_correlation_features:
+                            st.warning("未找到符合相关性阈值的特征，将显示所有特征的相关性热力图。")
+                            correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
+                        else:
+                            # 显示特征间相关性热力图
+                            st.write("特征间相关性热力图")
+                            correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
+                        
+                        # 显示热力图
+                        st_echarts(
+                            options=correlation_heatmap_option,
+                            height="600px",
+                            width="100%"
+                        )
+                        
+                        st.write(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
+                    
+                    # 在UI上显示VIF分析结果
+                    with st.expander("**VIF筛选**", expanded=False):
+                        vif_data = filter_results['vif']['data']
+                        low_vif_features = filter_results['vif']['features']
+                        vif_warnings = filter_results['vif']['warnings']
+                        collinear_features = filter_results['vif']['collinear_features']
+                        
+                        # 收集所有警告信息
+                        warning_messages = []
+                        if collinear_features:
+                            warning_messages.append(f"- 以下特征存在完全共线性或VIF值异常大：{', '.join(collinear_features)}")
+                        warning_messages.extend([f"- {warning}" for warning in vif_warnings])
+                        
+                        # 如果有警告信息，显示在一个warning框中
+                        if warning_messages:
+                            st.warning("VIF分析过程中发现以下问题：\n" + "\n".join(warning_messages))
+                        
+                        # 检查vif_data是否为空
+                        if not vif_data.empty:
+                            st.dataframe(vif_data)
+                            # 修改为接收返回值并渲染
+                            vif_bar_option = create_vif_bar_chart(vif_data, vif_threshold)
+                            st_echarts(
+                                options=vif_bar_option, 
+                                height=f"{max(400, len(vif_data) * 35)}px",
+                                width="100%"
+                            )
+                            st.write(f"VIF低于{vif_threshold}的特征: {low_vif_features}")
+                        else:
+                            st.warning("没有足够的特征进行VIF计算或多重共线性分析")
+                    
+                    # 在UI上显示统计显著性分析结果
+                    with st.expander("**统计显著性筛选**", expanded=False):
+                        sig_data = filter_results['significance']['data']
+                        significant_features = filter_results['significance']['features']
+                        
+                        st.write("统计显著性分析")
+                        if not sig_data.empty:
+                            st.dataframe(sig_data)
+                            # 修改为接收返回值并渲染
+                            f_score_option, p_value_option = create_significance_charts(sig_data, p_value_threshold)
+                            st_echarts(
+                                options=f_score_option, 
+                                height=f"{max(400, len(sig_data) * 35)}px",
+                                width="100%"
+                            )
+                            st_echarts(
+                                options=p_value_option, 
+                                height=f"{max(400, len(sig_data) * 35)}px",
+                                width="100%"
+                            )
+                            st.write(f"P值低于{p_value_threshold}的特征: {significant_features}")
+                        else:
+                            st.warning("没有足够的特征进行统计显著性分析")
+                    
+                    # 在UI上显示最终筛选结果
+                    st.success(f"特征筛选完成！从 {df.shape[1]} 个特征中选出 {len(filtered_features)} 个特征：{filtered_features}")
+                    
+                    # 保存筛选参数和详细信息到session state
+                    st.session_state['feature_filter_params'] = {
+                        'correlation_threshold': correlation_threshold,
+                        'vif_threshold': vif_threshold,
+                        'p_value_threshold': p_value_threshold
+                    }
+                    
+                    st.session_state['feature_filter_details'] = {
+                        'correlation': {'data': corr_data, 'features': high_correlation_features},
+                        'vif': {'data': vif_data, 'features': low_vif_features},
+                        'significance': {'data': sig_data, 'features': significant_features},
+                        'final': {'features': filtered_features}
+                    }
+                    
+                    # 更新session state中的筛选特征
+                    if filtered_features and len(filtered_features) > 0:
+                        st.session_state['filtered_features'] = filtered_features
+                        # 同时更新选择的特征，使界面上的多选框也更新
+                        st.session_state['selected_features'] = filtered_features
+                        # 标记已经完成筛选
+                        st.session_state['filter_applied'] = True
+                    else:
+                        st.error("特征筛选失败，将使用所有特征")
+                        st.session_state['filtered_features'] = all_features
+                        st.session_state['selected_features'] = all_features
+                        st.session_state['filter_applied'] = False
+                
+        # 特征选择多选框，使用session state中的特征作为默认值
+        selected_features = st.multiselect(
+            "选择用于训练的特征",
+            options=all_features,
+            default=st.session_state['selected_features']
+        )
+        
+        # 更新selected_features的session state
+        st.session_state['selected_features'] = selected_features
+    
+    # 模型参数设置
+    st.markdown("### 模型参数")
+    
+    lstm_params_left_col, lstm_params_right_col = st.columns(2)
+    with lstm_params_left_col:
+        hidden_size = st.number_input(
+            "隐藏层大小",
+            min_value=1,
+            max_value=512,
+            value=64
+        )
+        
+        num_layers = st.number_input(
+            "LSTM层数",
+            min_value=1,
+            max_value=5,
+            value=2
+        )
+        
+        dropout = st.slider(
+            "Dropout比例",
+            min_value=0.0,
+            max_value=0.9,
+            value=0.2,
+            step=0.1
+        )
+    
+    with lstm_params_right_col:
+        learning_rate = st.number_input(
+            "学习率",
+            min_value=0.0001,
+            max_value=0.1,
+            value=0.001,
+            format="%.4f"
+        )
+        
+        batch_size = st.number_input(
+            "批次大小",
+            min_value=1,
+            max_value=256,
+            value=32
+        )
+        
+        epochs = st.number_input(
+            "训练轮数",
+            min_value=1,
+            max_value=1000,
+            value=100
+        )
+    
+    # 训练控制
+    st.markdown("### 训练控制")
+    
+    lstm_train_btn_col, lstm_early_stop_col = st.columns([3, 1])
+    with lstm_train_btn_col:
+        if st.button(
+            "开始训练",
+            use_container_width=True
+        ):
+            st.session_state['start_training'] = True
+        else:
+            st.session_state['start_training'] = False
+        
+    with lstm_early_stop_col:
+        enable_early_stopping = st.checkbox(
+            "启用早停",
+            value=True
+        )
+    
+    # 训练进度和损失可视化的占位区域
+    progress_placeholder = st.empty()
+    loss_chart_placeholder = st.empty()
+    
+    # 如果会话中已有训练历史但界面刚刚加载，显示之前的训练历史
+    if 'training_history' in st.session_state and 'training_complete' in st.session_state and st.session_state['training_complete'] and not ('start_training' in st.session_state and st.session_state['start_training']):
+        history = st.session_state['training_history']
+        with loss_chart_placeholder:
+            # 绘制已有的损失曲线
+            history_df = pd.DataFrame({
+                '训练损失': history['train_loss'],
+                '验证损失': history['val_loss']
+            })
+            st.line_chart(history_df)
+    
+    if 'start_training' in st.session_state and st.session_state['start_training']:
+        with progress_placeholder.container():
+            st.info("训练过程将在这里显示...")
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+        with loss_chart_placeholder.container():
+            # 临时数据用于示例
+            chart_data = pd.DataFrame(
+                np.random.randn(20, 2),
+                columns=['训练损失', '验证损失']
+            )
+            st.line_chart(chart_data)
+
+# ARIMA参数设置
+with model_tabs[1]:       
+    # 添加数据预处理部分
+    st.markdown("#### 数据预处理")
+    
+    # 创建两列布局：左侧为控制区域，右侧为数据图表
+    arima_controls_col, arima_charts_col = st.columns([1, 2])
+    
+    with arima_controls_col:
+        # 变量选择框
+        if 'raw_data' in st.session_state and st.session_state['raw_data'] is not None:
+            df = st.session_state['raw_data']
+            
+            # 获取所有列名，排除日期类型的列
+            all_columns = []
+            date_columns = []
+            
+            for col in df.columns:
+                if pd.api.types.is_datetime64_any_dtype(df[col]):
+                    date_columns.append(col)
+                else:
+                    all_columns.append(col)
+            
+            # 如果所有列都被排除，给出警告
+            if not all_columns:
+                st.error("数据中没有可用于分析的非日期类型列")
+                st.stop()
+                
+            # 变量选择框
+            selected_var = st.selectbox(
+                "选择需要分析的变量",
+                options=all_columns,
+                index=0,
+                key="arima_selected_var"
+            )
+            
+            # 获取所选变量的数据
+            selected_data = df[selected_var]
+            
+            # 检查数据类型，处理日期时间类型
+            is_datetime = pd.api.types.is_datetime64_any_dtype(selected_data)
+            is_numeric = pd.api.types.is_numeric_dtype(selected_data)
+            
+            if is_datetime:
+                st.warning(f"选择的变量 '{selected_var}' 是日期时间类型，将转换为时间戳后进行分析")
+                # 将日期时间转换为时间戳（浮点数）
+                selected_data = (selected_data - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
+                # 显示转换后的数据类型
+                st.info(f"转换后的数据类型: {selected_data.dtype}")
+            elif not is_numeric:
+                st.error(f"选择的变量 '{selected_var}' 不是数值类型，无法进行时间序列分析")
+                st.stop()
+            
+            # 数据处理方法选择
+            transform_method = st.radio(
+                "数据处理方法",
+                options=["原始数据", "对数变换", "一阶差分", "一阶对数差分"],
+                index=0,
+                key="arima_transform_method"
+            )
+            
+            # 添加执行按钮，点击后更新图表
+            if st.button("更新图表", key="update_arima_charts"):
+                st.session_state['arima_processed'] = True
+            
+            # 平稳性检验结果显示区域
+            if 'arima_processed' in st.session_state and st.session_state['arima_processed']:                    
+                # 根据选择的方法进行数据处理
+                if transform_method == "原始数据":
+                    processed_data = selected_data
+                    transform_title = "原始数据"
+                    
+                    # 执行平稳性检验
+                    stationarity_results, is_stationary, _ = check_stationarity(processed_data)
+                    
+                elif transform_method == "对数变换":
+                    # 检查是否有非正值
+                    if (selected_data <= 0).any():
+                        st.warning("数据包含非正值，无法进行对数变换")
+                        processed_data = selected_data
+                        transform_title = "原始数据"
+                    else:
+                        processed_data = np.log(selected_data)
+                        transform_title = "对数变换后的数据"
+                    
+                    # 执行平稳性检验
+                    stationarity_results, is_stationary, _ = check_stationarity(processed_data)
+                    
+                elif transform_method == "一阶差分":
+                    diff_data, _ = diff_series(selected_data, diff_order=1, log_diff=False)
+                    processed_data = diff_data
+                    transform_title = "一阶差分后的数据"
+                    
+                    # 执行平稳性检验
+                    stationarity_results, is_stationary, _ = check_stationarity(processed_data)
+                    
+                elif transform_method == "一阶对数差分":
+                    # 检查是否有非正值
+                    if (selected_data <= 0).any():
+                        st.warning("数据包含非正值，无法进行对数差分")
+                        processed_data = selected_data
+                        transform_title = "原始数据"
+                    else:
+                        diff_data, _ = diff_series(selected_data, diff_order=1, log_diff=True)
+                        processed_data = diff_data
+                        transform_title = "一阶对数差分后的数据"
+                    
+                    # 执行平稳性检验
+                    stationarity_results, is_stationary, _ = check_stationarity(processed_data)
+                
+                # 平稳性检验结果展开框
+                with st.expander("ADF平稳性检验结果", expanded=True):
+                    
+                    st.metric(
+                        label="ADF统计量",
+                        value=f"{stationarity_results['ADF统计量']:.2f}"
+                    )
+                    st.metric(
+                        label="p值",
+                        value=f" {stationarity_results['p值']:.2f}"
+                    )
+
+                    # 根据p值判断是否平稳
+                    if is_stationary:
+                        st.success("数据序列是平稳的 (p值 < 0.05)")
+                    else:
+                        st.warning("数据序列不是平稳的 (p值 >= 0.05)")
+                
+                # 正态性检验结果展开框
+                with st.expander("正态性检验结果", expanded=True):
+                    # 执行正态性检验 (使用scipy的stats模块)
+                    from scipy import stats
+                    
+                    # 进行Shapiro-Wilk检验
+                    if len(processed_data) < 5000:  # Shapiro-Wilk适用于小样本
+                        stat, p_value = stats.shapiro(processed_data.dropna())
+                        test_name = "Shapiro-Wilk检验"
+                    else:  # 大样本使用K-S检验
+                        stat, p_value = stats.kstest(processed_data.dropna(), 'norm')
+                        test_name = "Kolmogorov-Smirnov检验"
+
+                    st.metric(
+                        label=f"{test_name}统计量",
+                        value=f"{stat:.4f}"
+                    )
+                    st.metric(
+                        label="p值",
+                        value=f"{p_value:.4f}"
+                    )
+
+                    # 根据p值判断是否符合正态分布
+                    if p_value < 0.05:
+                        st.warning(f"数据序列不符合正态分布 (p值 < 0.05)")
+                    else:
+                        st.success(f"数据序列符合正态分布 (p值 >= 0.05)")
+                    
+                    # 保存处理后的数据到会话状态
+                    st.session_state['arima_processed_data'] = processed_data
+                    st.session_state['arima_transform_title'] = transform_title
+
+        else:
+            st.warning("请先在数据查看页面加载数据")
+    
+    with arima_charts_col:
+        # 数据图表显示区域
+        if 'arima_processed' in st.session_state and st.session_state['arima_processed']:
+            if 'arima_processed_data' in st.session_state:
+                # 获取处理后的数据和标题
+                processed_data = st.session_state['arima_processed_data']
+                transform_title = st.session_state['arima_transform_title']
+                
+                # 创建折线图
+                try:
+                    # 创建包含索引的数据框
+                    # 处理差分后数据索引可能与原始数据不同的问题
+                    if transform_method in ["一阶差分", "一阶对数差分"]:
+                        # 对于差分数据，使用差分后的索引
+                        time_series_df = pd.DataFrame({transform_title: processed_data})
+                    else:
+                        # 对于原始数据或对数变换，保持原始索引
+                        time_series_df = pd.DataFrame({transform_title: processed_data}, index=df.index)
+                    
+                    timeseries_option = create_timeseries_chart(
+                        time_series_df,
+                        title=f"{selected_var} - {transform_title}"
+                    )
+                    st_echarts(options=timeseries_option, height="300px")
+                except Exception as e:
+                    st.error(f"无法绘制时间序列图: {str(e)}")
+                
+                # 创建直方图
+                try:
+                    histogram_option = create_histogram_chart(
+                        processed_data,
+                        title=f"{selected_var} - 分布直方图"
+                    )
+                    st_echarts(options=histogram_option, height="250px")
+                except Exception as e:
+                    st.error(f"无法绘制分布直方图: {str(e)}")
+                
+                # 创建QQ图
+                try:
+                    qq_option = create_qq_plot(
+                        processed_data,
+                        title=f"{selected_var} - QQ图"
+                    )
+                    st_echarts(options=qq_option, height="400px")
+                except Exception as e:
+                    st.warning(f"无法绘制QQ图: {str(e)}")
+                    
+
+            else:
+                st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
+        else:
+            st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
+    
+    # 添加描述性统计表格
+    st.markdown("### 描述性统计")
+    
+    # 保存所有数据序列
+    series_data = {}
+    
+    # 原始数据序列
+    if selected_var in df.columns:
+        original_series = df[selected_var]
+        original_series.name = f"{selected_var}_原始数据"
+        series_data["原始数据"] = original_series
+        
+        # 对数变换序列
+        if (original_series > 0).all():
+            log_series = np.log(original_series)
+            log_series.name = f"{selected_var}_对数变换"
+            series_data["对数变换"] = log_series
+        
+        # 一阶差分序列
+        diff_series_data, _ = diff_series(original_series, diff_order=1, log_diff=False)
+        diff_series_data.name = f"{selected_var}_一阶差分"
+        series_data["一阶差分"] = diff_series_data
+        
+        # 一阶对数差分序列
+        if (original_series > 0).all():
+            log_diff_series, _ = diff_series(original_series, diff_order=1, log_diff=True)
+            log_diff_series.name = f"{selected_var}_一阶对数差分"
+            series_data["一阶对数差分"] = log_diff_series
+    
+    # 生成所有序列的描述性统计表
+    all_stats_dfs = []
+    jb_stats = {}
+    
+    for name, series in series_data.items():
+        try:
+            stats_df, normality_test = generate_descriptive_statistics(series)
+            stats_df['VARIABLES'] = [name]  # 替换为序列名称
+            all_stats_dfs.append(stats_df)
+            jb_stats[name] = {
+                'JB统计量': normality_test['statistic'],
+                'p值': normality_test['p_value'],
+                '是否正态': "是" if normality_test['is_normal'] else "否"
+            }
+        except Exception as e:
+            st.warning(f"无法计算 {name} 的描述性统计: {str(e)}")
+    
+    # 合并所有统计表
+    if all_stats_dfs:
+        combined_stats_df = pd.concat(all_stats_dfs, ignore_index=True)
+        
+        # 表格格式化: 保留小数点位数为3位
+        format_cols = ['mean', 'p50', 'sd', 'min', 'max', 'skewness', 'kurtosis']
+        for col in format_cols:
+            if col in combined_stats_df.columns:
+                combined_stats_df[col] = combined_stats_df[col].apply(
+                    lambda x: f"{x:.3f}" if pd.notnull(x) else "N/A"
+                )
+        
+        # 重新排列列顺序以提高可读性
+        ordered_cols = ['VARIABLES', 'N', 'mean', 'p50', 'sd', 'min', 'max', 'skewness', 'kurtosis']
+        ordered_cols = [col for col in ordered_cols if col in combined_stats_df.columns]
+        combined_stats_df = combined_stats_df[ordered_cols]
+        
+        # 设置VARIABLES列为索引，使表格更清晰
+        combined_stats_df = combined_stats_df.set_index('VARIABLES')
+        
+        # 使用st.table而不是st.dataframe，以获得更好的静态表格展示
+        st.table(combined_stats_df)
+    else:
+        st.warning("无法生成描述性统计表")
+    
+    # 然后是原来的ARIMA参数设置部分
+    st.markdown("### ARIMA模型参数")
+    
+    # 添加一个按钮，用于显示ARIMA模型参数的说明
+    arima_params_left_col, arima_params_right_col = st.columns(2)
+    with arima_params_left_col:
+        p_param = st.number_input(
+            "p (AR阶数)",
+            min_value=0,
+            max_value=10,
+            value=2
+        )
+        
+        d_param = st.number_input(
+            "d (差分阶数)",
+            min_value=0,
+            max_value=2,
+            value=1
+        )
+    
+    with arima_params_right_col:
+        q_param = st.number_input(
+            "q (MA阶数)",
+            min_value=0,
+            max_value=10,
+            value=2
+        )
+        
+        seasonal = st.checkbox(
+            "包含季节性成分",
+            value=False
+        )
+
+# Prophet参数设置
+with model_tabs[2]:
+    st.markdown("### Prophet模型参数")
+    
+    prophet_params_left_col, prophet_params_right_col = st.columns(2)
+    with prophet_params_left_col:
+        yearly_seasonality = st.selectbox(
+            "年度季节性",
+            options=["auto", "True", "False"],
+            index=0
+        )
+        
+        weekly_seasonality = st.selectbox(
+            "周度季节性",
+            options=["auto", "True", "False"],
+            index=0
+        )
+    
+    with prophet_params_right_col:
+        daily_seasonality = st.selectbox(
+            "日度季节性",
+            options=["auto", "True", "False"],
+            index=0
+        )
+        
+        changepoint_prior_scale = st.slider(
+            "变点先验比例",
+            min_value=0.001,
+            max_value=0.5,
+            value=0.05,
+            step=0.001,
+            format="%.3f"
+        )
 
 # 用于在会话间保存模型训练状态
 if 'trained_models' not in st.session_state:
@@ -905,7 +898,7 @@ with st.expander("使用帮助"):
     """)
 
 # lstm执行训练的逻辑
-if start_training:
+if 'start_training' in st.session_state and st.session_state['start_training']:
     # 准备特征数据
     # 确保selected_features已定义且不为空
     if 'selected_features' not in locals() or not selected_features:

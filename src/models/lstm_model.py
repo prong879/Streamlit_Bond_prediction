@@ -10,6 +10,8 @@ LSTM模型工具模块
 - 特征选择
 - 特征选择可视化
 """
+
+# 导入必要的库
 import os
 import torch
 import torch.nn as nn
@@ -25,6 +27,7 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from sklearn.feature_selection import SelectKBest, f_regression
 from streamlit_echarts import st_echarts
 
+# LSTM模型定义
 class LSTMModel(nn.Module):
     """
     LSTM模型定义
@@ -68,6 +71,7 @@ class LSTMModel(nn.Module):
         out = self.fc(out)
         return out
 
+# 创建时间序列数据
 def create_sequences(data, seq_length):
     """
     创建时间序列数据
@@ -88,6 +92,7 @@ def create_sequences(data, seq_length):
         ys.append(y)
     return np.array(xs), np.array(ys)
 
+# 训练LSTM模型
 def train_lstm_model(X_train, y_train, X_val, y_val, model_params, training_params, progress_bar=None, status_text=None, loss_chart=None):
     """
     训练LSTM模型
@@ -201,6 +206,7 @@ def train_lstm_model(X_train, y_train, X_val, y_val, model_params, training_para
     
     return model, history
 
+# 评估LSTM模型性能
 def evaluate_lstm_model(model, X_test, y_test, target_scaler=None):
     """
     评估LSTM模型性能
@@ -260,6 +266,7 @@ def evaluate_lstm_model(model, X_test, y_test, target_scaler=None):
         'Test_Loss': float(test_loss.item())
     }
 
+# 绘制训练历史
 def plot_training_history(history, chart_placeholder=None):
     """
     绘制训练历史
@@ -293,6 +300,7 @@ def plot_training_history(history, chart_placeholder=None):
         else:
             plt.show()
 
+# 保存模型
 def save_model(model, model_params, training_params, history, path="models"):
     """
     保存模型和训练参数
@@ -337,6 +345,7 @@ def save_model(model, model_params, training_params, history, path="models"):
     
     return model_path
 
+# 加载已保存的模型
 def load_model(model_path, params_path=None):
     """
     加载已保存的模型
@@ -381,6 +390,7 @@ def load_model(model_path, params_path=None):
     except Exception as e:
         raise Exception(f"加载模型时出错: {str(e)}")
 
+# 准备LSTM模型训练所需的数据
 def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_length=20, train_ratio=0.8, val_ratio=0.15):
     """
     准备LSTM模型训练所需的数据
@@ -444,6 +454,7 @@ def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_le
         'feature_cols': feature_cols  # 返回实际使用的特征列名
     }
 
+# 使用LSTM模型进行预测
 def predict_lstm(model, X, target_scaler=None, n_steps=1):
     """
     使用LSTM模型进行预测
@@ -495,7 +506,7 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
         predictions = target_scaler.inverse_transform(predictions)
     
     return predictions
-
+# 绘制预测结果对比图
 def plot_predictions(y_true, y_pred, title='预测结果对比', dates=None):
     """
     绘制预测结果对比图
@@ -526,7 +537,8 @@ def plot_predictions(y_true, y_pred, title='预测结果对比', dates=None):
         st.pyplot(plt)
     else:
         plt.show()
-        
+
+# 执行完整的LSTM模型训练流程
 def run_lstm_training(
     selected_features, 
     df, 
@@ -907,339 +919,8 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
             'selected_features': [target_col] + [col for col in df.columns if col != target_col][:5] if target_col in df.columns else df.columns.tolist()[:6]
         }
 
-def create_correlation_bar_chart(corr_data, threshold):
-    """
-    创建相关性条形图
-    
-    Args:
-        corr_data: 包含特征和相关性数据的DataFrame
-        threshold: 相关性阈值
-        
-    Returns:
-        dict: ECharts配置项字典
-    """
-    # 按相关性绝对值排序
-    sorted_data = corr_data.copy()
-    sorted_data['Abs_Correlation'] = sorted_data['Correlation'].abs()
-    sorted_data = sorted_data.sort_values('Abs_Correlation', ascending=False)
-    
-    # 准备数据
-    features = sorted_data['Feature'].tolist()
-    correlations = sorted_data['Correlation'].tolist()
-    
-    # 创建相关性条形图ECharts配置 - 水平条形图
-    option = {
-        'title': {
-            'text': '特征与目标变量的相关性',
-            'left': 'center'
-        },
-        'tooltip': {
-            'trigger': 'axis',
-            'axisPointer': {
-                'type': 'shadow'
-            },
-            'formatter': {
-                'type': 'function',
-                'function': "function(params) { return params[0].name + ': ' + params[0].value.toFixed(4); }"
-            }
-        },
-        'grid': {
-            'left': '3%',
-            'right': '4%',
-            'bottom': '15%',
-            'containLabel': True
-        },
-        'xAxis': {
-            'type': 'value',
-            'name': '相关系数',
-            'min': -1,
-            'max': 1,
-            'interval': 0.2
-        },
-        'yAxis': {
-            'type': 'category',
-            'data': features,
-            'name': '特征',
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 0
-            }
-        },
-        'series': [
-            {
-                'name': '相关性',
-                'type': 'bar',
-                'data': correlations,
-                'itemStyle': {
-                    'color': {
-                        'type': 'function',
-                        'function': "function(params) { return params.value >= 0 ? '#5470c6' : '#ee6666'; }"
-                    }
-                }
-            }
-        ],
-        'markLine': {
-            'data': [
-                {
-                    'xAxis': threshold,
-                    'lineStyle': {
-                        'color': '#ff0000',
-                        'type': 'dashed'
-                    },
-                    'label': {
-                        'formatter': f'阈值: +{threshold}',
-                        'position': 'end'
-                    }
-                },
-                {
-                    'xAxis': -threshold,
-                    'lineStyle': {
-                        'color': '#ff0000',
-                        'type': 'dashed'
-                    },
-                    'label': {
-                        'formatter': f'阈值: -{threshold}',
-                        'position': 'end'
-                    }
-                }
-            ]
-        }
-    }
-    
-    # 返回配置项而不是直接渲染
-    return option
 
-def create_vif_bar_chart(vif_data, threshold):
-    """
-    创建VIF条形图
-    
-    Args:
-        vif_data: 包含特征和VIF数据的DataFrame
-        threshold: VIF阈值
-        
-    Returns:
-        dict: ECharts配置项字典
-    """
-    # 准备数据
-    features = vif_data['Feature'].tolist()
-    # 处理无穷大值，将其替换为一个较大的数值
-    vif_values = []
-    for vif in vif_data['VIF'].tolist():
-        if np.isinf(vif) or vif > 1e6:
-            vif_values.append(1e6)  # 使用1e6代替无穷大
-        else:
-            vif_values.append(float(vif))
-    
-    # 创建VIF条形图ECharts配置
-    option = {
-        'title': {
-            'text': '特征的VIF值（值越大表示共线性越严重）',
-            'left': 'center'
-        },
-        'tooltip': {
-            'trigger': 'axis',
-            'axisPointer': {
-                'type': 'shadow'
-            },
-            'formatter': {
-                'type': 'function',
-                'function': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '∞' : params[0].value.toFixed(2)); }"
-            }
-        },
-        'grid': {
-            'left': '3%',
-            'right': '4%',
-            'bottom': '3%',
-            'containLabel': True
-        },
-        'xAxis': {
-            'type': 'value',
-            'name': 'VIF值',
-            'axisLabel': {
-                'formatter': {
-                    'type': 'function',
-                    'function': "function(value) { return value >= 1e6 ? '∞' : value.toFixed(2); }"
-                }
-            }
-        },
-        'yAxis': {
-            'type': 'category',
-            'data': features,
-            'name': '特征',
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 0
-            }
-        },
-        'series': [
-            {
-                'name': 'VIF',
-                'type': 'bar',
-                'data': vif_values,
-                'itemStyle': {
-                    'color': '#91cc75'
-                }
-            }
-        ],
-        'markLine': {
-            'data': [
-                {
-                    'xAxis': threshold,
-                    'lineStyle': {
-                        'color': '#ff0000',
-                        'type': 'dashed'
-                    },
-                    'label': {
-                        'formatter': f'阈值: {threshold}',
-                        'position': 'end'
-                    }
-                }
-            ]
-        }
-    }
-    
-    # 返回配置项而不是直接渲染
-    return option
-
-def create_significance_charts(sig_data, p_value_threshold):
-    """
-    创建统计显著性图表（F值和P值）
-    
-    Args:
-        sig_data: 包含特征、F值和P值数据的DataFrame
-        p_value_threshold: P值阈值
-        
-    Returns:
-        tuple: 包含F值和P值的两个ECharts配置项字典
-    """
-    # 准备数据
-    features = sig_data['Feature'].tolist()
-    # 处理F值，确保不超过显示限制
-    f_scores = []
-    for f_value in sig_data['F值'].tolist():
-        if f_value > 1e6:
-            f_scores.append(1e6)
-        else:
-            f_scores.append(float(f_value))
-    p_values = sig_data['P值'].tolist()
-    
-    # F值图表配置
-    f_score_option = {
-        'title': {
-            'text': '特征的F值（值越大表示特征越重要）',
-            'left': 'center'
-        },
-        'tooltip': {
-            'trigger': 'axis',
-            'axisPointer': {
-                'type': 'shadow'
-            },
-            'formatter': {
-                'type': 'function',
-                'function': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '> 1e6' : params[0].value.toFixed(2)); }"
-            }
-        },
-        'grid': {
-            'left': '3%',
-            'right': '4%',
-            'bottom': '3%',
-            'containLabel': True
-        },
-        'xAxis': {
-            'type': 'value',
-            'name': 'F值',
-            'axisLabel': {
-                'formatter': {
-                    'type': 'function',
-                    'function': "function(value) { return value >= 1e6 ? '> 1e6' : value.toFixed(2); }"
-                }
-            }
-        },
-        'yAxis': {
-            'type': 'category',
-            'data': features,
-            'name': '特征',
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 0
-            }
-        },
-        'series': [
-            {
-                'name': 'F值',
-                'type': 'bar',
-                'data': f_scores,
-                'itemStyle': {
-                    'color': '#fac858'
-                }
-            }
-        ]
-    }
-    
-    # P值图表配置
-    p_value_option = {
-        'title': {
-            'text': '特征的P值（值越小表示越显著）',
-            'left': 'center'
-        },
-        'tooltip': {
-            'trigger': 'axis',
-            'axisPointer': {
-                'type': 'shadow'
-            }
-        },
-        'grid': {
-            'left': '3%',
-            'right': '4%',
-            'bottom': '3%',
-            'containLabel': True
-        },
-        'xAxis': {
-            'type': 'value',
-            'name': 'P值',
-            'axisLabel': {
-                'formatter': '{value}'
-            }
-        },
-        'yAxis': {
-            'type': 'category',
-            'data': features,
-            'name': '特征',
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 0
-            }
-        },
-        'series': [
-            {
-                'name': 'P值',
-                'type': 'bar',
-                'data': p_values,
-                'itemStyle': {
-                    'color': '#ee6666'
-                }
-            }
-        ],
-        'markLine': {
-            'data': [
-                {
-                    'xAxis': p_value_threshold,
-                    'lineStyle': {
-                        'color': '#ff0000',
-                        'type': 'dashed'
-                    },
-                    'label': {
-                        'formatter': f'阈值: {p_value_threshold}',
-                        'position': 'end'
-                    }
-                }
-            ]
-        }
-    }
-    
-    # 返回两个配置项而不是直接渲染
-    return f_score_option, p_value_option
-
+# 相关性热力图
 def create_correlation_heatmap(corr_matrix, filtered_features=None):
     """
     创建相关性热力图
@@ -1260,12 +941,16 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
         features = corr_matrix.columns.tolist()
     
     data = []
+    x_data = features
+    y_data = features
     
     # 转换数据格式为ECharts所需的格式
     for i in range(len(features)):
         for j in range(len(features)):
             value = corr_matrix.iloc[i, j]
-            data.append([i, j, round(float(value), 4)])
+            # 保留4位小数
+            rounded_value = round(float(value), 4)
+            data.append([i, j, rounded_value])
     
     # 创建相关性热力图ECharts配置
     option = {
@@ -1274,11 +959,7 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
             'left': 'center'
         },
         'tooltip': {
-            'position': 'top',
-            'formatter': {
-                'type': 'function',
-                'function': "function(params) { var i = params.data[0]; var j = params.data[1]; return features[j] + ' vs ' + features[i] + ': ' + params.data[2].toFixed(4); }"
-            }
+            'position': 'top'
         },
         'grid': {
             'height': '70%',
@@ -1286,7 +967,7 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
         },
         'xAxis': {
             'type': 'category',
-            'data': features,
+            'data': x_data,
             'splitArea': {
                 'show': True
             },
@@ -1297,7 +978,7 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
         },
         'yAxis': {
             'type': 'category',
-            'data': features,
+            'data': y_data,
             'splitArea': {
                 'show': True
             }
@@ -1319,10 +1000,7 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
             'data': data,
             'label': {
                 'show': True,
-                'formatter': {
-                    'type': 'function',
-                    'function': "function(params) { return params.data[2].toFixed(2); }"
-                }
+                'formatter': '{c}'
             },
             'emphasis': {
                 'itemStyle': {
