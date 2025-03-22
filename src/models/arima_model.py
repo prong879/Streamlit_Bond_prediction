@@ -681,6 +681,7 @@ def evaluate_arima_model(test_data, forecast_values, train_data=None):
     
     return metrics
 
+# 逆差分
 def inverse_diff(original_data, diff_df, d=1, log_diff=False):
     """
     对差分序列进行逆差分操作，还原为原始数据尺度
@@ -868,6 +869,7 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
             'left': 'center'
         },
         'tooltip': {
+            "position": "bottom",
             'trigger': 'axis'
         },
         'legend': {
@@ -958,6 +960,7 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
             'left': 'center'
         },
         'tooltip': {
+            "position": "bottom",
             'trigger': 'axis',
             'axisPointer': {
                 'type': 'shadow'
@@ -1065,8 +1068,8 @@ def create_qq_plot(series, title='Q-Q图'):
                 'left': 'center'
             },
             'tooltip': {
-                'trigger': 'item',
-                'formatter': "function(params) { return '理论分位数: ' + params.value[0].toFixed(2) + '<br>样本分位数: ' + params.value[1].toFixed(2); }"
+                "position": "bottom",
+                'trigger': 'item'
             },
             'grid': {
                 'left': '3%',
