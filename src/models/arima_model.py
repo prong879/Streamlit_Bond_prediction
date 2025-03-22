@@ -906,7 +906,7 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
     
     return option
 
-# 创建ECharts分布直方图函数
+# 创建ECharts分布直方图函数，带有正态拟合线
 def create_histogram_chart(series, title='分布直方图', bins=30):
     """
     创建直方图的echarts选项
@@ -936,6 +936,20 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
     # 准备x轴标签（使用分箱中点）
     bin_centers = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
     bin_labels = [f'{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}' for i in range(len(bin_edges)-1)]
+    
+    # 计算正态分布拟合曲线
+    # 获取数据的均值和标准差
+    mu = series.mean()
+    sigma = series.std()
+    
+    # 计算理论正态分布的Y值
+    # 首先计算每个箱子中心的概率密度函数值
+    pdf_values = stats.norm.pdf(bin_centers, mu, sigma)
+    
+    # 将PDF值转换为与直方图对应的频数
+    # 需要乘以数据总数和箱宽度来与直方图高度匹配
+    bin_width = bin_edges[1] - bin_edges[0]
+    pdf_heights = pdf_values * len(series) * bin_width
     
     # 创建echarts选项
     option = {
@@ -970,12 +984,26 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
             'type': 'value',
             'name': '频数'
         },
-        'series': [{
-            'name': '频数',
-            'type': 'bar',
-            'data': hist.tolist(),
-            'barWidth': '90%'
-        }]
+        'series': [
+            {
+                'name': '频数',
+                'type': 'bar',
+                'data': hist.tolist(),
+                'barWidth': '90%'
+            },
+            {
+                'name': '正态分布拟合',
+                'type': 'line',
+                'smooth': True,
+                'data': list(zip(range(len(bin_centers)), pdf_heights.tolist())),
+                'showSymbol': False,
+                'lineStyle': {
+                    'color': '#FF0000',
+                    'width': 2
+                },
+                'z': 10
+            }
+        ]
     }
     
     return option
