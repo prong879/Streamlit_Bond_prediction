@@ -906,6 +906,7 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
     
     return option
 
+# 创建ECharts分布直方图函数
 def create_histogram_chart(series, title='分布直方图', bins=30):
     """
     创建直方图的echarts选项
