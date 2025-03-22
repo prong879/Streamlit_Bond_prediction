@@ -851,7 +851,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                 # 准备显著性数据
                 sig_data = pd.DataFrame({
                     'Feature': p_values.index,
-                    'P值': p_values.values,
+                    'P值': p_values.values.round(2),
                     'F值': f_values
                 }).sort_values('P值', ascending=True)
             except Exception as e:
@@ -920,7 +920,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         }
 
 
-# 相关性热力图
+# 筛选后的特征的相关性热力图
 def create_correlation_heatmap(corr_matrix, filtered_features=None):
     """
     创建相关性热力图
@@ -932,17 +932,33 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
     Returns:
         dict: ECharts配置项字典
     """
+    # 检查相关矩阵是否为空
+    if corr_matrix is None or corr_matrix.empty:
+        # 返回一个提示信息图表
+        return {
+            'title': {
+                'text': '相关性热力图 - 无数据',
+                'left': 'center'
+            },
+            'xAxis': {'type': 'category', 'data': []},
+            'yAxis': {'type': 'category', 'data': []},
+            'series': []
+        }
+    
     # 准备数据
     if filtered_features is not None and len(filtered_features) > 0:
         # 只保留筛选后的特征
         features = [f for f in filtered_features if f in corr_matrix.columns]
+        # 检查筛选后的特征列表是否为空
+        if not features:
+            features = corr_matrix.columns.tolist()
         corr_matrix = corr_matrix.loc[features, features]
     else:
         features = corr_matrix.columns.tolist()
     
     data = []
-    x_data = features
-    y_data = features
+    x_data = features.copy()
+    y_data = features.copy()
     
     # 转换数据格式为ECharts所需的格式
     for i in range(len(features)):
@@ -954,16 +970,13 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
     
     # 创建相关性热力图ECharts配置
     option = {
-        'title': {
-            'text': '特征相关性热力图',
-            'left': 'center'
-        },
         'tooltip': {
-            'position': 'top'
+            'position': 'top',
         },
         'grid': {
-            'height': '70%',
-            'top': '10%'
+            'top': '0',
+            'bottom': '10%',
+            'left': '15%'
         },
         'xAxis': {
             'type': 'category',
@@ -973,7 +986,10 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
             },
             'axisLabel': {
                 'interval': 0,
-                'rotate': 45
+                'rotate': 45,
+                'formatter': {
+                    'function': "function(value) { if(value.length > 15) return value.substring(0,12) + '...'; return value; }"
+                }
             }
         },
         'yAxis': {
@@ -981,15 +997,20 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
             'data': y_data,
             'splitArea': {
                 'show': True
+            },
+            'axisLabel': {
+                'formatter': {
+                    'function': "function(value) { if(value.length > 15) return value.substring(0,12) + '...'; return value; }"
+                }
             }
         },
         'visualMap': {
             'min': -1,
             'max': 1,
             'calculable': True,
-            'orient': 'horizontal',
-            'left': 'center',
-            'bottom': '0%',
+            'orient': 'vertical',
+            'left': '0',
+            'bottom': '65',
             'inRange': {
                 'color': ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
             }
@@ -999,8 +1020,7 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
             'type': 'heatmap',
             'data': data,
             'label': {
-                'show': True,
-                'formatter': '{c}'
+                'show': True
             },
             'emphasis': {
                 'itemStyle': {
@@ -1011,5 +1031,210 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
         }]
     }
     
-    # 返回配置项而不是直接渲染
     return option 
+
+# 创建统计显著性图表
+def create_significance_charts(sig_data, p_value_threshold=0.05):
+    """
+    创建统计显著性条形图（只显示P值，横向展示）
+    
+    参数:
+        sig_data: 包含Feature、P值和F值列的DataFrame
+        p_value_threshold: P值阈值
+        
+    返回:
+        tuple: (空字典, P值图表配置) - 为保持API兼容性，第一个返回值仍然保留但为空
+    """
+    # 检查输入数据是否为空
+    if sig_data is None or sig_data.empty:
+        # 返回空图表
+        empty_option = {
+            'title': {
+                'text': '无统计显著性数据',
+                'left': 'center'
+            },
+            'xAxis': {'type': 'category', 'data': []},
+            'yAxis': {'type': 'value'},
+            'series': []
+        }
+        return empty_option, empty_option
+    
+    # 按P值排序
+    sorted_data = sig_data.sort_values('P值', ascending=False)
+    
+    # 准备数据
+    features = sorted_data['Feature'].tolist()
+    p_values = sorted_data['P值'].round(2).tolist()
+    
+    # 设置P值条形颜色：低于阈值为绿色，高于阈值为红色
+    p_colors = ['#2ecc71' if val < p_value_threshold else '#e74c3c' for val in p_values]
+    
+    # 为P值图表创建数据项，包含颜色信息
+    p_items = []
+    for i, p_val in enumerate(p_values):
+        p_items.append({
+            'value': p_val,
+            'itemStyle': {
+                'color': p_colors[i]
+            }
+        })
+    
+    # P值条形图配置 - 横向显示
+    p_option = {
+        'tooltip': {
+            'trigger': 'axis',
+            'axisPointer': {
+                'type': 'shadow'
+            }
+        },
+        'grid': {
+            'left': '5%',
+            'right': '4%',
+            'bottom': '3%',
+            'top': '5%',
+            'containLabel': True
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': 'P值',
+            'nameLocation': 'center',
+            'nameGap': 40,
+            'splitLine': {
+                'show': True
+            }
+        },
+        'xAxis': {
+            'type': 'category',
+            'data': features,
+            'axisLabel': {
+                'interval': 0,
+                'rotate': 45
+            }
+        },
+        'series': [{
+            'name': 'P值',
+            'type': 'bar',
+            'data': p_items,
+            'label': {
+                'show': True,
+                'position': 'top',
+                'formatter': '{c0}'
+            },
+            'markLine': {
+                'symbol': ['none', 'none'],
+                'data': [
+                    {'yAxis': p_value_threshold, 'lineStyle': {'type': 'dashed', 'color': '#e74c3c'}, 'label': {'formatter': str(round(p_value_threshold, 2))}}
+                ]
+            }
+        }]
+    }
+    
+    # 为保持API兼容性，返回一个空选项作为第一个元素
+    empty_f_option = {}
+    
+    return empty_f_option, p_option
+
+# 创建相关性条形统计图
+def create_correlation_bar_chart(corr_data, correlation_threshold=0.5):
+    """
+    创建相关性条形统计图
+    
+    参数:
+        corr_data: 包含Feature和Correlation列的DataFrame
+        correlation_threshold: 相关性阈值
+        
+    返回:
+        dict: ECharts配置项字典
+    """
+    # 按相关性绝对值排序，但保留原始相关性值
+    features = corr_data['Feature'].tolist()
+    correlations = corr_data['Correlation'].tolist()
+    
+    # 生成数据源，排序和生成颜色
+    data = []
+    for i in range(len(features)):
+        data.append({
+            'name': features[i],
+            'value': correlations[i]
+        })
+    
+    # 按相关性绝对值排序
+    data.sort(key=lambda x: abs(x['value']), reverse=True)
+    
+    # 提取排序后的特征和相关性数据
+    features = [item['name'] for item in data]
+    correlations = [item['value'] for item in data]
+    
+    # 设置条形颜色：正相关为红色，负相关为蓝色
+    colors = ['#c23531' if val >= 0 else '#3498db' for val in correlations]
+    
+    # 创建ECharts选项
+    option = {
+        'title': {
+            'text': '特征与目标变量的相关性',
+            'left': 'center'
+        },
+        'tooltip': {
+            'trigger': 'axis',
+            'axisPointer': {
+                'type': 'shadow'
+            }
+        },
+        'grid': {
+            'left': '3%',
+            'right': '4%',
+            'bottom': '3%',
+            'containLabel': True
+        },
+        'xAxis': {
+            'type': 'value',
+            'name': '相关系数',
+            'nameLocation': 'center',
+            'nameGap': 30,
+            'min': -1,
+            'max': 1,
+            'splitLine': {
+                'show': True
+            },
+            'axisLine': {
+                'show': True
+            }
+        },
+        'yAxis': {
+            'type': 'category',
+            'data': features,
+            'axisLabel': {
+                'interval': 0,
+                'formatter': {
+                    'function': 'function(value) { if(value.length > 15) return value.substring(0,12) + "..."; return value; }'
+                }
+            }
+        },
+        'series': [{
+            'name': '相关性',
+            'type': 'bar',
+            'data': correlations,
+            'itemStyle': {
+                'color': {
+                    'function': 'function(params) { return colors[params.dataIndex]; }'
+                }
+            },
+            'label': {
+                'show': True,
+                'position': 'right',
+                'formatter': {
+                    'function': 'function(params) { return params.value.toFixed(4); }'
+                }
+            },
+            'markLine': {
+                'symbol': ['none', 'none'],
+                'data': [
+                    {'xAxis': correlation_threshold, 'lineStyle': {'type': 'dashed', 'color': '#c23531'}, 'label': {'formatter': '+'+str(round(correlation_threshold, 2))}},
+                    {'xAxis': -correlation_threshold, 'lineStyle': {'type': 'dashed', 'color': '#3498db'}, 'label': {'formatter': str(round(-correlation_threshold, 2))}}
+                ]
+            }
+        }]
+    }
+    
+    return option
+

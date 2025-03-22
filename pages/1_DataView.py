@@ -310,6 +310,7 @@ def create_correlation_heatmap(df):
     
     return option
 
+# 创建K线图和成交量联动图表
 def create_echarts_kline_volume(df, selected_mas=[]):
     """
     创建K线图和成交量联动图表

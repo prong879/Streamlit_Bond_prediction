@@ -23,6 +23,7 @@ import io
 import base64
 from statsmodels.stats.stattools import durbin_watson
 
+# 生成描述性统计表
 def generate_descriptive_statistics(series):
     """
     生成描述性统计表，包含N、mean、p50、sd、min、max、skewness、kurtosis等指标
@@ -67,6 +68,7 @@ def generate_descriptive_statistics(series):
     
     return stats_df, normality_test
 
+# 检查时间序列的平稳性
 def check_stationarity(series):
     """
     检查时间序列的平稳性
@@ -143,6 +145,7 @@ def check_stationarity(series):
     
     return results, is_stationary, df
 
+# 对时间序列进行差分处理
 def diff_series(series, diff_order=1, log_diff=False):
     """
     对时间序列进行差分处理，支持普通差分和对数差分
@@ -208,6 +211,7 @@ def diff_series(series, diff_order=1, log_diff=False):
     
     return diff_data, df
 
+# 检查白噪声
 def check_white_noise(series):
     """
     白噪声检验 (Ljung-Box检验)
@@ -234,6 +238,7 @@ def check_white_noise(series):
     
     return lb_df, is_white_noise
 
+# 分析时间序列的自相关函数和偏自相关函数
 def analyze_acf_pacf(series):
     """
     分析时间序列的自相关函数和偏自相关函数
@@ -275,6 +280,7 @@ def analyze_acf_pacf(series):
     
     return acf_values, pacf_values, chart_data
 
+# 寻找最佳ARIMA或SARIMA模型参数
 def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2), q_range=range(0, 3), 
                          P_range=None, D_range=None, Q_range=None, s=None, criterion='aic'):
     """
@@ -384,6 +390,7 @@ def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2),
     
     return best_params
 
+# 拟合ARIMA或SARIMA模型
 def fit_arima_model(timeseries, order):
     """
     拟合ARIMA或SARIMA模型
@@ -448,6 +455,7 @@ def fit_arima_model(timeseries, order):
             st.error(f"备选ARIMA模型拟合也失败: {str(e2)}")
             return None, None
 
+# 检查残差
 def check_residuals(model):
     """
     分析ARIMA模型残差
@@ -541,6 +549,7 @@ def check_residuals(model):
     
     return diagnostics, chart_data
 
+# 预测ARIMA模型
 def forecast_arima(model, train_data, steps=10):
     """
     使用ARIMA或SARIMA模型进行预测
@@ -612,22 +621,7 @@ def forecast_arima(model, train_data, steps=10):
     
     return forecast_results, forecast_df
 
-def plot_to_base64(fig):
-    """
-    将matplotlib图形转换为base64编码的字符串
-    
-    参数:
-    fig: matplotlib图形
-    
-    返回:
-    base64编码的图像字符串
-    """
-    buf = io.BytesIO()
-    fig.savefig(buf, format='png', dpi=100, bbox_inches='tight')
-    buf.seek(0)
-    img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
-    return img_str
-
+# 评估ARIMA模型性能
 def evaluate_arima_model(test_data, forecast_values, train_data=None):
     """
     评估ARIMA模型性能
@@ -783,6 +777,7 @@ def inverse_diff(original_data, diff_df, d=1, log_diff=False):
     
     return result_df
 
+# 创建时间序列折线图的echarts选项
 def create_timeseries_chart(df, title='时间序列图', series_names=None):
     """
     创建时间序列折线图的echarts选项
@@ -1011,6 +1006,7 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
     
     return option
 
+# 创建QQ图的echarts选项
 def create_qq_plot(series, title='Q-Q图'):
     """
     创建QQ图的echarts选项
