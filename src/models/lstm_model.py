@@ -684,7 +684,7 @@ def run_lstm_training(
     } 
 
 # 特征筛选函数
-def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_threshold=0.05):
+def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_threshold=0.05, target_col='Close'):
     """
     特征筛选函数 - 并行评估各筛选方法，取交集
     
@@ -693,6 +693,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         correlation_threshold: 相关性阈值
         vif_threshold: VIF阈值
         p_value_threshold: P值阈值
+        target_col: 目标变量列名，默认为'Close'
         
     Returns:
         dict: 包含筛选结果和数据的字典
@@ -704,7 +705,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         # 1. 相关性分析 - 独立评估所有特征
         corr_matrix = numeric_df.corr(numeric_only=True)
         # 计算与目标变量的相关性，保留原始值（不取绝对值）
-        target_corr = corr_matrix['Close']
+        target_corr = corr_matrix[target_col]
         # 按相关性绝对值排序，但保留原始相关性值
         target_corr_sorted = target_corr[abs(target_corr).sort_values(ascending=False).index]
         # 根据阈值筛选特征（使用绝对值判断）
@@ -716,84 +717,103 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
             'Correlation': target_corr_sorted.values
         })
             
-        # 2. VIF分析 - 独立评估所有特征
-        # 基于所有数值特征进行VIF分析，包括目标变量
-        vif_features = numeric_df.columns.tolist()
-        low_vif_features = []
-        vif_data = pd.DataFrame()
+        # 2. VIF分析 - 排除目标变量，优化计算逻辑
         vif_warnings = []  # 收集VIF分析过程中的警告信息
         
-        # 加入特征数量验证检查
-        if len(vif_features) > 1:  # 确保至少有两个特征
-            X = numeric_df[vif_features].copy()
+        # 获取所有特征，但排除目标变量
+        predictor_features = [col for col in numeric_df.columns if col != target_col]
+        
+        # 初始化VIF分析结果
+        vif_data = pd.DataFrame()
+        low_vif_features = []
+        collinear_features = []
+        
+        # 检查是否有足够的特征进行VIF分析
+        if len(predictor_features) > 1:  # 至少需要两个特征
+            # 创建特征数据框，仅包含预测变量
+            X = numeric_df[predictor_features].copy()
             
-            # 加入非空检查
+            # 非空检查
             if not X.empty and X.shape[1] > 0:
-                # 检查是否存在已知的高度相关特征
-                if 'MA20' in X.columns and 'Upper_Band' in X.columns and 'Lower_Band' in X.columns:
-                    X = X.drop(['Upper_Band', 'Lower_Band'], axis=1, errors='ignore')
-                    vif_warnings.append("布林带指标（Upper_Band、Lower_Band）与MA20存在完全共线性关系")
+                # 移除低方差特征
+                try:
+                    variance = X.var()
+                    low_var_features = variance[variance < 1e-6].index.tolist()
+                    if low_var_features:
+                        X = X.drop(low_var_features, axis=1)
+                        vif_warnings.append(f"移除了以下低方差特征: {', '.join(low_var_features)}")
+                except Exception as e:
+                    vif_warnings.append(f"方差分析出错: {str(e)}")
                 
-                # 添加常数项
-                X = sm.add_constant(X)
-                vif_data = pd.DataFrame()
-                vif_data["Feature"] = X.columns
-                vif_values = []
-                
-                # 用于收集完全共线性的特征
-                collinear_features = []
-                
-                for i in range(X.shape[1]):
+                # 确保变量数量足够
+                if X.shape[1] > 1:
                     try:
                         # 计算VIF值
-                        r_squared_i = sm.OLS(
-                            X.iloc[:, i],
-                            X.iloc[:, list(range(i)) + list(range(i+1, X.shape[1]))],
-                            missing='drop'
-                        ).fit().rsquared
+                        vif_results = []
                         
-                        # 处理极端情况
-                        if r_squared_i > 0.999:
-                            vif_i = float('inf')
-                            collinear_features.append(X.columns[i])
-                        else:
-                            vif_i = 1.0 / (1.0 - r_squared_i)
+                        for feature in X.columns:
+                            # 选择该特征作为因变量
+                            y_var = X[feature]
+                            # 选择其他特征作为自变量
+                            X_vars = X.drop(feature, axis=1)
                             
-                        # 处理数值异常
-                        if not np.isfinite(vif_i) or vif_i > 1e6:
-                            vif_i = float('inf')
-                            if X.columns[i] not in collinear_features:
-                                collinear_features.append(X.columns[i])
-                            
+                            try:
+                                # 添加常数项
+                                X_vars = sm.add_constant(X_vars)
+                                # 拟合OLS模型
+                                model = sm.OLS(y_var, X_vars, missing='drop').fit()
+                                # 计算R²值
+                                r_squared = model.rsquared
+                                
+                                # 计算VIF值，注意处理极端情况
+                                if r_squared >= 0.999:
+                                    vif = float('inf')
+                                    collinear_features.append(feature)
+                                else:
+                                    vif = 1.0 / (1.0 - r_squared)
+                                    
+                                # 记录结果
+                                vif_results.append({
+                                    'Feature': feature,
+                                    'VIF': vif
+                                })
+                            except Exception as e:
+                                vif_warnings.append(f"计算特征'{feature}'的VIF值时出错: {str(e)}")
+                                vif_results.append({
+                                    'Feature': feature,
+                                    'VIF': float('inf')
+                                })
+                                collinear_features.append(feature)
+                        
+                        # 创建VIF数据框并排序
+                        vif_data = pd.DataFrame(vif_results)
+                        vif_data = vif_data.sort_values('VIF', ascending=False)
+                        
+                        # 筛选VIF低于阈值的特征
+                        low_vif_features = vif_data[vif_data['VIF'] < vif_threshold]['Feature'].tolist()
                     except Exception as e:
-                        vif_warnings.append(f"计算特征 '{X.columns[i]}' 的VIF值时出错: {str(e)}")
-                        vif_i = float('inf')
-                        if X.columns[i] not in collinear_features:
-                            collinear_features.append(X.columns[i])
-                    
-                    vif_values.append(vif_i)
-                
-                vif_data["VIF"] = vif_values
-                vif_data = vif_data[vif_data["Feature"] != "const"]  # 移除常数项
-                vif_data = vif_data.sort_values("VIF", ascending=False)
-                
-                # 获取VIF低于阈值的特征
-                low_vif_features = vif_data[vif_data["VIF"] < vif_threshold]["Feature"].tolist()
+                        vif_warnings.append(f"VIF计算过程出错: {str(e)}")
+                        low_vif_features = predictor_features
+                else:
+                    vif_warnings.append("特征数量不足，无法计算VIF")
+                    low_vif_features = predictor_features
             else:
-                low_vif_features = vif_features
+                vif_warnings.append("数据为空或没有有效特征")
+                low_vif_features = predictor_features
         else:
-            low_vif_features = vif_features
+            vif_warnings.append("特征数量不足，需要至少两个特征才能计算VIF")
+            low_vif_features = predictor_features
         
         # 3. 统计显著性分析 - 独立评估所有特征
         significant_features = []
         sig_data = pd.DataFrame()
         
         # 使用所有数值特征
-        X_sig_features = numeric_df.columns.tolist()
+        X_sig_features = predictor_features
         
         if len(X_sig_features) > 0:
             X = numeric_df[X_sig_features]
-            y = numeric_df['Close']
+            y = numeric_df[target_col]
             X = sm.add_constant(X)
             
             try:
@@ -806,7 +826,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                 for feature in p_values.index:
                     try:
                         # 计算单个特征的F值
-                        X_feature = X[[feature]]
+                        X_feature = sm.add_constant(X[[feature]])
                         model_feature = sm.OLS(y, X_feature).fit()
                         f_value = model_feature.fvalue
                         # 如果F值过大，使用一个合理的上限值
@@ -832,8 +852,8 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         if high_correlation_features and low_vif_features and significant_features:
             # 取三者交集
             selected_features = list(set(high_correlation_features) & 
-                                    set(low_vif_features) & 
-                                    set(significant_features))
+                                   set(low_vif_features) & 
+                                   set(significant_features))
             
             # 如果交集为空，尝试取两两交集
             if not selected_features:
@@ -843,7 +863,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
                 
                 # 使用最大的交集
                 max_intersection = max([corr_vif_intersection, corr_sig_intersection, vif_sig_intersection], 
-                                      key=len)
+                                     key=len)
                 selected_features = max_intersection
                 
                 # 如果所有两两交集也为空，使用相关性结果
@@ -854,8 +874,8 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
             selected_features = high_correlation_features if high_correlation_features else numeric_df.columns.tolist()
         
         # 5. 确保目标变量在特征集中
-        if 'Close' not in selected_features:
-            selected_features.append('Close')
+        if target_col not in selected_features:
+            selected_features.append(target_col)
         
         # 返回所有筛选结果和数据
         return {
@@ -884,7 +904,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         return {
             'error': str(e),
             'traceback': error_traceback,
-            'selected_features': ['Close'] + [col for col in df.columns if col != 'Close'][:5] if 'Close' in df.columns else df.columns.tolist()[:6]
+            'selected_features': [target_col] + [col for col in df.columns if col != target_col][:5] if target_col in df.columns else df.columns.tolist()[:6]
         }
 
 def create_correlation_bar_chart(corr_data, threshold):
@@ -894,12 +914,20 @@ def create_correlation_bar_chart(corr_data, threshold):
     Args:
         corr_data: 包含特征和相关性数据的DataFrame
         threshold: 相关性阈值
+        
+    Returns:
+        dict: ECharts配置项字典
     """
-    # 准备数据
-    features = corr_data['Feature'].tolist()
-    correlations = corr_data['Correlation'].tolist()
+    # 按相关性绝对值排序
+    sorted_data = corr_data.copy()
+    sorted_data['Abs_Correlation'] = sorted_data['Correlation'].abs()
+    sorted_data = sorted_data.sort_values('Abs_Correlation', ascending=False)
     
-    # 创建相关性条形图ECharts配置
+    # 准备数据
+    features = sorted_data['Feature'].tolist()
+    correlations = sorted_data['Correlation'].tolist()
+    
+    # 创建相关性条形图ECharts配置 - 水平条形图
     option = {
         'title': {
             'text': '特征与目标变量的相关性',
@@ -910,29 +938,32 @@ def create_correlation_bar_chart(corr_data, threshold):
             'axisPointer': {
                 'type': 'shadow'
             },
-            'formatter': "function(params) { return params[0].name + ': ' + params[0].value.toFixed(4); }"
+            'formatter': {
+                'type': 'function',
+                'function': "function(params) { return params[0].name + ': ' + params[0].value.toFixed(4); }"
+            }
         },
         'grid': {
-            'left': '5%',
-            'right': '10%',
+            'left': '3%',
+            'right': '4%',
             'bottom': '15%',
             'containLabel': True
         },
         'xAxis': {
-            'type': 'category',
-            'data': features,
-            'name': '特征',
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 45
-            }
-        },
-        'yAxis': {
             'type': 'value',
             'name': '相关系数',
             'min': -1,
             'max': 1,
             'interval': 0.2
+        },
+        'yAxis': {
+            'type': 'category',
+            'data': features,
+            'name': '特征',
+            'axisLabel': {
+                'interval': 0,
+                'rotate': 0
+            }
         },
         'series': [
             {
@@ -940,16 +971,19 @@ def create_correlation_bar_chart(corr_data, threshold):
                 'type': 'bar',
                 'data': correlations,
                 'itemStyle': {
-                    'color': "function(params) { return params.value >= 0 ? '#5470c6' : '#ee6666'; }"
+                    'color': {
+                        'type': 'function',
+                        'function': "function(params) { return params.value >= 0 ? '#5470c6' : '#ee6666'; }"
+                    }
                 }
             }
         ],
         'markLine': {
             'data': [
                 {
-                    'yAxis': threshold,
+                    'xAxis': threshold,
                     'lineStyle': {
-                        'color': '#91cc75',
+                        'color': '#ff0000',
                         'type': 'dashed'
                     },
                     'label': {
@@ -958,9 +992,9 @@ def create_correlation_bar_chart(corr_data, threshold):
                     }
                 },
                 {
-                    'yAxis': -threshold,
+                    'xAxis': -threshold,
                     'lineStyle': {
-                        'color': '#91cc75',
+                        'color': '#ff0000',
                         'type': 'dashed'
                     },
                     'label': {
@@ -972,8 +1006,8 @@ def create_correlation_bar_chart(corr_data, threshold):
         }
     }
     
-    # 使用streamlit-echarts渲染图表
-    st_echarts(option, height="400px")
+    # 返回配置项而不是直接渲染
+    return option
 
 def create_vif_bar_chart(vif_data, threshold):
     """
@@ -982,6 +1016,9 @@ def create_vif_bar_chart(vif_data, threshold):
     Args:
         vif_data: 包含特征和VIF数据的DataFrame
         threshold: VIF阈值
+        
+    Returns:
+        dict: ECharts配置项字典
     """
     # 准备数据
     features = vif_data['Feature'].tolist()
@@ -1004,7 +1041,10 @@ def create_vif_bar_chart(vif_data, threshold):
             'axisPointer': {
                 'type': 'shadow'
             },
-            'formatter': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '∞' : params[0].value.toFixed(2)); }"
+            'formatter': {
+                'type': 'function',
+                'function': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '∞' : params[0].value.toFixed(2)); }"
+            }
         },
         'grid': {
             'left': '3%',
@@ -1016,7 +1056,10 @@ def create_vif_bar_chart(vif_data, threshold):
             'type': 'value',
             'name': 'VIF值',
             'axisLabel': {
-                'formatter': "function(value) { return value >= 1e6 ? '∞' : value.toFixed(2); }"
+                'formatter': {
+                    'type': 'function',
+                    'function': "function(value) { return value >= 1e6 ? '∞' : value.toFixed(2); }"
+                }
             }
         },
         'yAxis': {
@@ -1055,8 +1098,8 @@ def create_vif_bar_chart(vif_data, threshold):
         }
     }
     
-    # 使用streamlit-echarts渲染图表
-    st_echarts(option, height=f"{max(400, len(features) * 30)}px")
+    # 返回配置项而不是直接渲染
+    return option
 
 def create_significance_charts(sig_data, p_value_threshold):
     """
@@ -1065,6 +1108,9 @@ def create_significance_charts(sig_data, p_value_threshold):
     Args:
         sig_data: 包含特征、F值和P值数据的DataFrame
         p_value_threshold: P值阈值
+        
+    Returns:
+        tuple: 包含F值和P值的两个ECharts配置项字典
     """
     # 准备数据
     features = sig_data['Feature'].tolist()
@@ -1088,7 +1134,10 @@ def create_significance_charts(sig_data, p_value_threshold):
             'axisPointer': {
                 'type': 'shadow'
             },
-            'formatter': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '> 1e6' : params[0].value.toFixed(2)); }"
+            'formatter': {
+                'type': 'function',
+                'function': "function(params) { return params[0].name + ': ' + (params[0].value >= 1e6 ? '> 1e6' : params[0].value.toFixed(2)); }"
+            }
         },
         'grid': {
             'left': '3%',
@@ -1100,7 +1149,10 @@ def create_significance_charts(sig_data, p_value_threshold):
             'type': 'value',
             'name': 'F值',
             'axisLabel': {
-                'formatter': "function(value) { return value >= 1e6 ? '> 1e6' : value.toFixed(2); }"
+                'formatter': {
+                    'type': 'function',
+                    'function': "function(value) { return value >= 1e6 ? '> 1e6' : value.toFixed(2); }"
+                }
             }
         },
         'yAxis': {
@@ -1185,19 +1237,28 @@ def create_significance_charts(sig_data, p_value_threshold):
         }
     }
     
-    # 使用streamlit-echarts渲染图表
-    st_echarts(f_score_option, height=f"{max(400, len(features) * 30)}px")
-    st_echarts(p_value_option, height=f"{max(400, len(features) * 30)}px")
+    # 返回两个配置项而不是直接渲染
+    return f_score_option, p_value_option
 
-def create_correlation_heatmap(corr_matrix):
+def create_correlation_heatmap(corr_matrix, filtered_features=None):
     """
     创建相关性热力图
     
     Args:
         corr_matrix: 相关性矩阵DataFrame
+        filtered_features: 筛选后的特征列表，如果提供则只显示这些特征
+        
+    Returns:
+        dict: ECharts配置项字典
     """
     # 准备数据
-    features = corr_matrix.columns.tolist()
+    if filtered_features is not None and len(filtered_features) > 0:
+        # 只保留筛选后的特征
+        features = [f for f in filtered_features if f in corr_matrix.columns]
+        corr_matrix = corr_matrix.loc[features, features]
+    else:
+        features = corr_matrix.columns.tolist()
+    
     data = []
     
     # 转换数据格式为ECharts所需的格式
@@ -1216,7 +1277,7 @@ def create_correlation_heatmap(corr_matrix):
             'position': 'top',
             'formatter': {
                 'type': 'function',
-                'function': "function(params) { return features[params.data[1]] + ' vs ' + features[params.data[0]] + ': ' + params.data[2].toFixed(4); }"
+                'function': "function(params) { var i = params.data[0]; var j = params.data[1]; return features[j] + ' vs ' + features[i] + ': ' + params.data[2].toFixed(4); }"
             }
         },
         'grid': {
@@ -1260,7 +1321,7 @@ def create_correlation_heatmap(corr_matrix):
                 'show': True,
                 'formatter': {
                     'type': 'function',
-                    'function': "function(params) { return params.data[2].toFixed(4); }"
+                    'function': "function(params) { return params.data[2].toFixed(2); }"
                 }
             },
             'emphasis': {
@@ -1272,5 +1333,5 @@ def create_correlation_heatmap(corr_matrix):
         }]
     }
     
-    # 使用streamlit-echarts渲染图表
-    st_echarts(option, height=f"{max(400, len(features) * 30)}px") 
+    # 返回配置项而不是直接渲染
+    return option 

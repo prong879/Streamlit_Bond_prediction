@@ -906,14 +906,15 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
     
     return option
 
-def create_histogram_chart(series, title='分布直方图', bins=30):
+def create_histogram_chart(series, title='分布直方图', bins=30, add_normal_fit=True):
     """
-    创建直方图的echarts选项
+    创建直方图的echarts选项，可选择添加标准正态拟合线
     
     参数:
     series: Series，要绘制直方图的数据
     title: 图表标题
     bins: 直方图的分箱数
+    add_normal_fit: 是否添加正态分布拟合线
     
     返回:
     dict: echarts图表选项
@@ -930,11 +931,71 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
     series = series.dropna()
     
     # 计算直方图
-    hist, bin_edges = np.histogram(series, bins=bins)
+    hist, bin_edges = np.histogram(series, bins=bins, density=True)  # 使用密度=True计算概率密度
     
-    # 准备x轴标签（使用分箱中点）
+    # 准备用于显示的数据
     bin_centers = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
-    bin_labels = [f'{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}' for i in range(len(bin_edges)-1)]
+    
+    # 创建系列列表
+    series_list = [{
+        'name': '数据分布',
+        'type': 'bar',
+        'data': [[float(bin_centers[i]), float(h)] for i, h in enumerate(hist.tolist())],  # [x坐标, 高度]格式
+        'barWidth': (bin_edges[1] - bin_edges[0]) * 0.8,  # 设置柱宽为分箱宽度的80%
+        'itemStyle': {
+            'color': '#5470c6',
+            'opacity': 0.7
+        },
+        'xAxisIndex': 0,
+        'yAxisIndex': 0
+    }]
+    
+    # 添加正态分布拟合线
+    if add_normal_fit:
+        # 计算数据的均值和标准差
+        mu = series.mean()
+        sigma = series.std()
+        
+        # 确保sigma不为0，否则无法绘制正态曲线
+        if sigma <= 0:
+            st.warning(f"数据标准差为0或异常值({sigma})，无法绘制正态分布拟合线")
+        else:
+            # 生成更平滑的x轴点，范围确保覆盖数据的±3个标准差
+            min_x = max(min(series), mu - 3.5*sigma)  # 限制在μ-3.5σ以上
+            max_x = min(max(series), mu + 3.5*sigma)  # 限制在μ+3.5σ以下
+            
+            # 生成至少100个点，确保曲线平滑
+            x = np.linspace(min_x, max_x, 100)
+            
+            # 计算正态分布概率密度函数
+            from scipy.stats import norm
+            pdf = norm.pdf(x, mu, sigma)
+            
+            # 添加正态分布拟合线为新的系列
+            normal_data = [[float(x_val), float(pdf_val)] for x_val, pdf_val in zip(x, pdf)]
+            
+            series_list.append({
+                'name': '正态分布拟合',
+                'type': 'line',
+                'smooth': True,
+                'symbol': 'none',
+                'sampling': 'average',
+                'itemStyle': {
+                    'color': '#ff0000'  # 使用更鲜明的红色
+                },
+                'lineStyle': {
+                    'width': 2,
+                    'type': 'solid'
+                },
+                'emphasis': {
+                    'lineStyle': {
+                        'width': 3
+                    }
+                },
+                'data': normal_data,
+                'xAxisIndex': 0,
+                'yAxisIndex': 0
+            })
     
     # 创建echarts选项
     option = {
@@ -942,39 +1003,64 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
             'text': title,
             'left': 'center'
         },
+        'legend': {
+            'data': ['数据分布'] + (['正态分布拟合'] if add_normal_fit else []),
+            'top': 25
+        },
         'tooltip': {
             'trigger': 'axis',
             'axisPointer': {
-                'type': 'shadow'
-            }
+                'type': 'cross'
+            },
+            'formatter': '''function (params) {
+                // 判断是哪种类型的数据
+                if (params[0].seriesType === 'bar') {
+                    return '区间: ' + params[0].name + '<br/>概率密度: ' + params[0].value.toFixed(4);
+                } else if (params[0].seriesType === 'line') {
+                    // 正态分布拟合线的显示
+                    return 'x值: ' + params[0].value[0].toFixed(2) + '<br/>概率密度: ' + params[0].value[1].toFixed(4);
+                }
+                return "";
+            }'''
         },
         'grid': {
             'left': '3%',
             'right': '4%',
-            'bottom': '8%',
+            'bottom': '15%',  # 增加底部空间以容纳图例
             'containLabel': True
         },
         'xAxis': {
-            'type': 'category',
-            'data': bin_labels,
-            'axisTick': {
-                'alignWithLabel': True
+            'type': 'value',  # 改为数值轴，便于正确显示正态分布
+            'name': '数据值',
+            'splitLine': {
+                'show': True
             },
             'axisLabel': {
-                'rotate': 45,
-                'interval': 'auto'
+                'formatter': '{value}'
             }
         },
         'yAxis': {
             'type': 'value',
-            'name': '频数'
+            'name': '概率密度',
+            'splitLine': {
+                'show': True
+            }
         },
-        'series': [{
-            'name': '频数',
-            'type': 'bar',
-            'data': hist.tolist(),
-            'barWidth': '90%'
-        }]
+        'series': series_list,
+        'dataZoom': [
+            {
+                'type': 'inside',
+                'start': 0,
+                'end': 100
+            },
+            {
+                'show': True,
+                'type': 'slider',
+                'bottom': '5%',
+                'start': 0,
+                'end': 100
+            }
+        ]
     }
     
     return option
