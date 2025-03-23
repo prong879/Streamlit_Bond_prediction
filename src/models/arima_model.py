@@ -869,7 +869,7 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
         },
         'legend': {
             'data': [name for name in series_names if name in df.columns],
-            'top': 'bottom'
+            'top': '7%'
         },
         'grid': {
             'left': '3%',
@@ -1108,4 +1108,253 @@ def create_qq_plot(series, title='Q-Q图'):
         return option
     except Exception as e:
         # 捕获所有可能的异常，包括计算理论分位数时可能出现的问题
-        raise ValueError(f"生成QQ图时出错: {str(e)}") 
+        raise ValueError(f"生成QQ图时出错: {str(e)}")
+
+# 创建自相关图和偏自相关图的echarts选项
+def create_acf_pacf_charts(series, lags=40, title_prefix=''):
+    """
+    创建自相关图和偏自相关图的echarts选项
+    
+    参数:
+    series: Series，要绘制的数据
+    lags: 最大滞后阶数
+    title_prefix: 图表标题前缀，通常为变量名
+    
+    返回:
+    dict, dict: acf_option, pacf_option (echarts图表选项)
+    """
+    # 确保数据是数值类型
+    if not pd.api.types.is_numeric_dtype(series):
+        # 如果是日期时间类型，转换为时间戳
+        if pd.api.types.is_datetime64_any_dtype(series):
+            series = (series - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
+        else:
+            raise TypeError(f"无法处理类型为 {series.dtype} 的数据，需要数值类型数据")
+    
+    # 移除缺失值
+    series = series.dropna()
+    
+    # 计算ACF和PACF值
+    acf_values = acf(series, nlags=lags)
+    pacf_values = pacf(series, nlags=lags)
+    
+    # 计算置信区间
+    conf_level = 1.96 / np.sqrt(len(series))
+    
+    # 准备X轴数据（滞后阶数）
+    lags_range = list(range(lags + 1))
+    
+    # 创建ACF图表选项
+    acf_option = {
+        'title': {
+            'text': f'{title_prefix} - 自相关函数(ACF)',
+            'left': 'center'
+        },
+        'tooltip': {
+            'trigger': 'axis',
+            'axisPointer': {
+                'type': 'shadow'
+            }
+        },
+        'grid': {
+            'left': '3%',
+            'right': '4%',
+            'bottom': '8%',
+            'containLabel': True
+        },
+        'xAxis': {
+            'type': 'category',
+            'data': lags_range,
+            'name': '滞后阶数'
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': 'ACF值'
+        },
+        'series': [
+            {
+                'name': 'ACF值',
+                'type': 'bar',
+                'data': acf_values.round(2).tolist(),
+                'itemStyle': {
+                    'color': '#5470c6'
+                },
+                'markLine': {
+                    'data': [
+                        {'yAxis': conf_level, 'name': '95%置信区间', 'lineStyle': {'color': 'red', 'type': 'dashed'}},
+                        {'yAxis': -conf_level, 'name': '95%置信区间', 'lineStyle': {'color': 'red', 'type': 'dashed'}}
+                    ],
+                    'label': {
+                        'show': False
+                    },
+                    'symbol': ['none', 'none'] # 移除两端的箭头
+                }
+            }
+        ]
+    }
+    
+    # 创建PACF图表选项
+    pacf_option = {
+        'title': {
+            'text': f'{title_prefix} - 偏自相关函数(PACF)',
+            'left': 'center'
+        },
+        'tooltip': {
+            'trigger': 'axis',
+            'axisPointer': {
+                'type': 'shadow'
+            }
+        },
+        'grid': {
+            'left': '3%',
+            'right': '4%',
+            'bottom': '8%',
+            'containLabel': True
+        },
+        'xAxis': {
+            'type': 'category',
+            'data': lags_range,
+            'name': '滞后阶数'
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': 'PACF值'
+        },
+        'series': [
+            {
+                'name': 'PACF值',
+                'type': 'bar',
+                'data': pacf_values.round(2).tolist(),
+                'itemStyle': {
+                    'color': '#91cc75'
+                },
+                'markLine': {
+                    'data': [
+                        {'yAxis': conf_level, 'name': '95%置信区间', 'lineStyle': {'color': 'red'}},
+                        {'yAxis': -conf_level, 'name': '95%置信区间', 'lineStyle': {'color': 'red'}}
+                    ],
+                    'label': {
+                        'show': False
+                    },
+                    'symbol': ['none', 'none'] # 移除两端的箭头
+                }
+            }
+        ]
+    }
+    
+    return acf_option, pacf_option
+
+# 检测ACF和PACF的截尾或拖尾特性
+def check_acf_pacf_pattern(series, lags=30, alpha=0.05):
+    """
+    检测时间序列的ACF和PACF是截尾还是拖尾特性
+    
+    参数:
+    series: 时间序列数据
+    lags: 最大滞后阶数
+    alpha: 显著性水平，默认0.05
+    
+    返回:
+    dict: 包含ACF和PACF的判断结果
+    """
+    # 确保数据是数值类型
+    if not pd.api.types.is_numeric_dtype(series):
+        # 如果是日期时间类型，转换为时间戳
+        if pd.api.types.is_datetime64_any_dtype(series):
+            series = (series - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
+        else:
+            raise TypeError(f"无法处理类型为 {series.dtype} 的数据，需要数值类型数据")
+    
+    # 移除缺失值
+    series = series.dropna()
+    
+    # 计算ACF和PACF值
+    acf_values = acf(series, nlags=lags)
+    pacf_values = pacf(series, nlags=lags)
+    
+    # 计算置信区间
+    conf_level = stats.norm.ppf(1 - alpha/2) / np.sqrt(len(series))
+    
+    # 判断ACF是截尾还是拖尾
+    # 截尾: 在某一阶后，自相关系数突然变得不显著
+    # 拖尾: 自相关系数逐渐衰减至0
+    
+    # 首先忽略滞后0阶(ACF[0]始终为1)
+    acf_significant = np.abs(acf_values[1:]) > conf_level
+    pacf_significant = np.abs(pacf_values[1:]) > conf_level
+    
+    # ACF判断
+    acf_pattern = "拖尾"  # 默认假设拖尾
+    acf_cutoff = 0
+    
+    # 查找ACF截尾点 - 连续多个不显著的点表示截尾
+    # 我们寻找至少3个连续不显著的点
+    consecutive_count = 0
+    for i, is_sig in enumerate(acf_significant, 1):
+        if not is_sig:
+            consecutive_count += 1
+            if consecutive_count >= 3:  # 至少3个连续不显著点
+                acf_pattern = "截尾"
+                acf_cutoff = i - 2  # 减去连续计数
+                break
+        else:
+            consecutive_count = 0
+    
+    # 如果没有找到明确的截尾点但后半部分大多不显著
+    if acf_pattern == "拖尾" and sum(~acf_significant[len(acf_significant)//2:]) > len(acf_significant)//4:
+        # 查找最后一个显著的点
+        for i in range(len(acf_significant)-1, 0, -1):
+            if acf_significant[i]:
+                acf_cutoff = i + 1
+                acf_pattern = "截尾"
+                break
+    
+    # PACF判断
+    pacf_pattern = "拖尾"  # 默认假设拖尾
+    pacf_cutoff = 0
+    
+    # 查找PACF截尾点
+    consecutive_count = 0
+    for i, is_sig in enumerate(pacf_significant, 1):
+        if not is_sig:
+            consecutive_count += 1
+            if consecutive_count >= 3:  # 至少3个连续不显著点
+                pacf_pattern = "截尾"
+                pacf_cutoff = i - 2  # 减去连续计数
+                break
+        else:
+            consecutive_count = 0
+    
+    # 如果没有找到明确的截尾点但后半部分大多不显著
+    if pacf_pattern == "拖尾" and sum(~pacf_significant[len(pacf_significant)//2:]) > len(pacf_significant)//4:
+        # 查找最后一个显著的点
+        for i in range(len(pacf_significant)-1, 0, -1):
+            if pacf_significant[i]:
+                pacf_cutoff = i + 1
+                pacf_pattern = "截尾"
+                break
+    
+    # 根据结果推断ARMA(p,q)模型初步判断
+    if acf_pattern == "截尾" and pacf_pattern == "拖尾":
+        model_suggestion = f"数据可能符合MA({acf_cutoff})模型"
+    elif acf_pattern == "拖尾" and pacf_pattern == "截尾":
+        model_suggestion = f"数据可能符合AR({pacf_cutoff})模型"
+    elif acf_pattern == "拖尾" and pacf_pattern == "拖尾":
+        model_suggestion = f"数据可能符合ARMA(p,q)模型，建议尝试ARMA({pacf_cutoff},{acf_cutoff})"
+    else:  # 两者都截尾
+        model_suggestion = "模式不明确，可能需要进一步分析"
+    
+    return {
+        "acf": {
+            "pattern": acf_pattern,
+            "cutoff": acf_cutoff if acf_pattern == "截尾" else None,
+            "significant": acf_significant.tolist()
+        },
+        "pacf": {
+            "pattern": pacf_pattern,
+            "cutoff": pacf_cutoff if pacf_pattern == "截尾" else None,
+            "significant": pacf_significant.tolist()
+        },
+        "model_suggestion": model_suggestion,
+        "conf_level": conf_level
+    } 

@@ -42,7 +42,9 @@ from src.models.arima_model import (
     generate_descriptive_statistics,
     create_timeseries_chart,
     create_histogram_chart,
-    create_qq_plot
+    create_qq_plot,
+    create_acf_pacf_charts,
+    check_acf_pacf_pattern
 )
 
 # 导入LSTM相关函数
@@ -679,21 +681,23 @@ with model_tabs[1]:
                 
                 # 平稳性检验结果展开框
                 with st.expander("ADF平稳性检验结果", expanded=True):
-                    
-                    st.metric(
-                        label="ADF统计量",
-                        value=f"{stationarity_results['ADF统计量']:.2f}"
-                    )
-                    st.metric(
-                        label="p值",
-                        value=f" {stationarity_results['p值']:.2f}"
-                    )
+                    ADF_col1, ADF_col2 = st.columns(2)
+                    with ADF_col1:
+                        st.metric(
+                            label="ADF统计量",
+                            value=f"{stationarity_results['ADF统计量']:.2f}"
+                        )
+                    with ADF_col2:
+                        st.metric(
+                            label="p值",
+                            value=f" {stationarity_results['p值']:.2f}"
+                        )
 
                     # 根据p值判断是否平稳
                     if is_stationary:
-                        st.success("平稳的 (p值 < 0.05)")
+                        st.success("序列平稳 (p值 < 0.05)")
                     else:
-                        st.warning("不平稳 (p值 >= 0.05)")
+                        st.warning("序列不平稳 (p值 >= 0.05)")
                 
                 # 正态性检验结果展开框
                 with st.expander("正态性检验结果", expanded=True):
@@ -708,6 +712,7 @@ with model_tabs[1]:
                         stat, p_value = stats.kstest(processed_data.dropna(), 'norm')
                         test_name = "Kolmogorov-Smirnov检验"
 
+                    # 显示正态检验结果
                     st.metric(
                         label=f"{test_name}统计量",
                         value=f"{stat:.2f}"
@@ -722,10 +727,74 @@ with model_tabs[1]:
                         st.warning(f"不符合正态分布 (p值 < 0.05)")
                     else:
                         st.success(f"符合正态分布 (p值 >= 0.05)")
+                
+                # 白噪声检验结果展开框
+                with st.expander("Ljung-Box白噪声检验结果", expanded=True):
+                    # 执行白噪声检验
+                    try:
+                        lb_df, is_white_noise = check_white_noise(processed_data.dropna())
+                        
+                        # 显示结果
+                                                
+                        # 第一个滞后阶数的Q统计量和p值
+                        first_lag_q = lb_df.iloc[0]['Q统计量']
+                        first_lag_p = lb_df.iloc[0]['p值']
+                        
+                        st.write("滞后阶数=1")
+
+                        LB_col1, LB_col2 = st.columns(2)
+                        with LB_col1:
+                            st.metric(
+                                label="Q统计量",
+                                value=f"{first_lag_q:.2f}"
+                            )
+                        with LB_col2:
+                            st.metric(
+                                label="p值",
+                                value=f"{first_lag_p:.2f}"
+                            )
+                        
+                        # 根据p值判断是否为白噪声
+                        if is_white_noise:
+                            st.success("序列为白噪声 (p值 > 0.05)")
+                        else:
+                            st.warning("序列不是白噪声 (p值 < 0.05)")
+                    except Exception as e:
+                        st.error(f"无法执行白噪声检验: {str(e)}")
+                
+                # 添加自相关检测结果展开框
+                with st.expander("自相关检测结果", expanded=True):
+                    # 执行自相关检测
+                    try:
+                        acf_pacf_pattern = check_acf_pacf_pattern(processed_data.dropna(), lags=30)
+                        
+                        # 显示ACF结果
+                        acf_pattern = acf_pacf_pattern["acf"]["pattern"]
+                        acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
+                        
+                        if acf_pattern == "截尾":
+                            st.info(f"ACF: {acf_cutoff}阶截尾")
+                        else:
+                            st.info("ACF: 拖尾")
                     
-                    # 保存处理后的数据到会话状态
-                    st.session_state['arima_processed_data'] = processed_data
-                    st.session_state['arima_transform_title'] = transform_title
+                        # 显示PACF结果
+                        pacf_pattern = acf_pacf_pattern["pacf"]["pattern"]
+                        pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
+                        
+                        if pacf_pattern == "截尾":
+                            st.info(f"PACF: {pacf_cutoff}阶截尾")
+                        else:
+                            st.info("PACF: 拖尾")
+                        
+                        # 显示模型建议（简化）
+                        st.success(f"定阶参数建议: {acf_pacf_pattern['model_suggestion']}")
+                        
+                    except Exception as e:
+                        st.error(f"无法执行自相关检测: {str(e)}")
+                
+                # 保存处理后的数据到会话状态
+                st.session_state['arima_processed_data'] = processed_data
+                st.session_state['arima_transform_title'] = transform_title
 
         else:
             st.warning("请先在数据查看页面加载数据")
@@ -753,7 +822,7 @@ with model_tabs[1]:
                         time_series_df,
                         title=f"{selected_var} - {transform_title}"
                     )
-                    st_echarts(options=timeseries_option, height="300px")
+                    st_echarts(options=timeseries_option, height="400px")
                 except Exception as e:
                     st.error(f"无法绘制时间序列图: {str(e)}")
                 
@@ -763,7 +832,7 @@ with model_tabs[1]:
                         processed_data,
                         title=f"{selected_var} - 分布直方图"
                     )
-                    st_echarts(options=histogram_option, height="250px")
+                    st_echarts(options=histogram_option, height="350px")
                 except Exception as e:
                     st.error(f"无法绘制分布直方图: {str(e)}")
                 
@@ -776,6 +845,27 @@ with model_tabs[1]:
                     st_echarts(options=qq_option, height="400px")
                 except Exception as e:
                     st.warning(f"无法绘制QQ图: {str(e)}")
+                
+                # QQ图后添加自相关和偏自相关图
+                try:
+                    # 创建自相关图和偏自相关图
+                    acf_option, pacf_option = create_acf_pacf_charts(
+                        processed_data,
+                        lags=30,  # 设置最大滞后阶数为30
+                        title_prefix=f"{selected_var}"
+                    )
+                    
+                    # 分两列显示ACF和PACF
+                    acf_col, pacf_col = st.columns(2)
+                    
+                    with acf_col:
+                        st_echarts(options=acf_option, height="200px")
+                    
+                    with pacf_col:
+                        st_echarts(options=pacf_option, height="200px")
+                        
+                except Exception as e:
+                    st.warning(f"无法绘制自相关和偏自相关图: {str(e)}")
                     
 
             else:
@@ -858,15 +948,16 @@ with model_tabs[1]:
     st.markdown("### ARIMA模型参数")
     
     # 添加一个按钮，用于显示ARIMA模型参数的说明
-    arima_params_left_col, arima_params_right_col = st.columns(2)
-    with arima_params_left_col:
+    arima_params_ar_col, arima_params_d_col, arima_params_ma_col = st.columns([1,1,1])
+    with arima_params_ar_col:
         p_param = st.number_input(
             "p (AR阶数)",
             min_value=0,
             max_value=10,
             value=2
         )
-        
+    
+    with arima_params_d_col:
         d_param = st.number_input(
             "d (差分阶数)",
             min_value=0,
@@ -874,18 +965,15 @@ with model_tabs[1]:
             value=1
         )
     
-    with arima_params_right_col:
+    with arima_params_ma_col:
         q_param = st.number_input(
             "q (MA阶数)",
             min_value=0,
             max_value=10,
             value=2
         )
-        
-        seasonal = st.checkbox(
-            "包含季节性成分",
-            value=False
-        )
+
+
 
 # Prophet参数设置
 with model_tabs[2]:
