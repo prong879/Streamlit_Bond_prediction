@@ -571,6 +571,10 @@ with model_tabs[0]:
 
 # ARIMA参数设置
 with model_tabs[1]:       
+    # 检查是否需要初始化ARIMA相关状态
+    if 'arima_processed' not in st.session_state:
+        st.session_state['arima_processed'] = True
+    
     # 添加数据预处理部分
     st.markdown("#### 数据预处理")
     
@@ -597,11 +601,16 @@ with model_tabs[1]:
                 st.error("数据中没有可用于分析的非日期类型列")
                 st.stop()
                 
+            # 尝试默认选择"Close"列，如果存在的话
+            default_index = 0
+            if 'Close' in all_columns:
+                default_index = all_columns.index('Close')
+                
             # 变量选择框
             selected_var = st.selectbox(
                 "选择需要分析的变量",
                 options=all_columns,
-                index=0,
+                index=default_index,
                 key="arima_selected_var"
             )
             
@@ -630,12 +639,17 @@ with model_tabs[1]:
                 key="arima_transform_method"
             )
             
-            # 添加执行按钮，点击后更新图表
-            if st.button("更新图表", key="update_arima_charts"):
-                st.session_state['arima_processed'] = True
+            # 自动设置处理标志
+            st.session_state['arima_processed'] = True
             
-            # 平稳性检验结果显示区域
-            if 'arima_processed' in st.session_state and st.session_state['arima_processed']:                    
+            # 首次加载页面时，确保已经初始化处理数据
+            if 'arima_processed_data' not in st.session_state:
+                # 默认使用所选变量的原始数据
+                st.session_state['arima_processed_data'] = selected_data
+                st.session_state['arima_transform_title'] = "原始数据"
+            
+            # 数据处理和可视化区域
+            if 'arima_processed' in st.session_state and st.session_state['arima_processed']:
                 # 根据选择的方法进行数据处理
                 if transform_method == "原始数据":
                     processed_data = selected_data
@@ -769,9 +783,9 @@ with model_tabs[1]:
                             acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
                             
                             if acf_pattern == "截尾":
-                                st.success(f"ACF函数在{acf_cutoff}阶截尾")
+                                st.success(f"ACF函数{acf_cutoff}阶截尾")
                             else:
-                                st.info("ACF函数呈拖尾特性")
+                                st.info("ACF函数拖尾")
                         
                         # 显示PACF结果
                         with col2:
@@ -779,9 +793,9 @@ with model_tabs[1]:
                             pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
                             
                             if pacf_pattern == "截尾":
-                                st.success(f"PACF函数在{pacf_cutoff}阶截尾")
+                                st.success(f"PACF函数{pacf_cutoff}阶截尾")
                             else:
-                                st.info("PACF函数呈拖尾特性")
+                                st.info("PACF函数拖尾")
                         
                         # 显示模型建议
                         st.info(f"模型建议: {acf_pacf_pattern['model_suggestion']}")
@@ -792,9 +806,10 @@ with model_tabs[1]:
                 # 保存处理后的数据到会话状态
                 st.session_state['arima_processed_data'] = processed_data
                 st.session_state['arima_transform_title'] = transform_title
+                st.session_state['arima_processed'] = True
 
-        else:
-            st.warning("请先在数据查看页面加载数据")
+            else:
+                st.warning("请先在数据查看页面加载数据")
     
     with arima_charts_col:
         # 数据图表显示区域
@@ -806,15 +821,52 @@ with model_tabs[1]:
                 
                 # 创建折线图
                 try:
-                    # 创建包含索引的数据框
-                    # 处理差分后数据索引可能与原始数据不同的问题
+                    # 创建包含索引的数据框，确保使用正确的日期
                     if transform_method in ["一阶差分", "一阶对数差分"]:
-                        # 对于差分数据，使用差分后的索引
-                        time_series_df = pd.DataFrame({transform_title: processed_data})
+                        # 对于差分数据，需要注意日期索引的处理
+                        # 差分会减少数据点，所以需要跳过原始数据的前几个点
+                        diff_order = 1  # 默认为一阶差分
+                        
+                        # 创建与处理后数据长度相同的索引
+                        if isinstance(df.index, pd.DatetimeIndex):
+                            # 修复：确保数据与日期正确匹配，而不是反向
+                            # 使用日期索引，但要确保顺序一致
+                            sorted_df = df.sort_index()
+                            # 差分后数据长度会减少，所以使用后面的日期索引对应差分数据
+                            time_series_df = pd.DataFrame({
+                                transform_title: processed_data.values
+                            }, index=sorted_df.index[diff_order:diff_order+len(processed_data)])
+                        else:
+                            # 如果没有日期索引，尝试从df中获取日期列
+                            if 'Date' in df.columns:
+                                sorted_df = df.sort_values('Date')
+                                time_series_df = pd.DataFrame({
+                                    transform_title: processed_data.values
+                                }, index=sorted_df['Date'].values[diff_order:diff_order+len(processed_data)])
+                            else:
+                                # 如果没有Date列，使用默认索引
+                                time_series_df = pd.DataFrame({transform_title: processed_data})
                     else:
-                        # 对于原始数据或对数变换，保持原始索引
-                        time_series_df = pd.DataFrame({transform_title: processed_data}, index=df.index)
+                        # 对于原始数据或对数变换，直接使用原始索引
+                        if isinstance(df.index, pd.DatetimeIndex):
+                            # 修复：确保数据与日期正确匹配，而不是反向
+                            sorted_df = df.sort_index()
+                            # 使用与处理后数据相同长度的索引
+                            time_series_df = pd.DataFrame({
+                                transform_title: processed_data.values
+                            }, index=sorted_df.index[:len(processed_data)])
+                        else:
+                            # 如果没有日期索引，尝试从df中获取日期列
+                            if 'Date' in df.columns:
+                                sorted_df = df.sort_values('Date')
+                                time_series_df = pd.DataFrame({
+                                    transform_title: processed_data.values
+                                }, index=sorted_df['Date'].values[:len(processed_data)])
+                            else:
+                                # 如果没有Date列，使用默认索引
+                                time_series_df = pd.DataFrame({transform_title: processed_data})
                     
+                    # 创建时间序列图
                     timeseries_option = create_timeseries_chart(
                         time_series_df,
                         title=f"{selected_var} - {transform_title}"
@@ -866,9 +918,9 @@ with model_tabs[1]:
                     
 
             else:
-                st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
+                st.info("请在左侧选择变量和数据处理方法")
         else:
-            st.info("请在左侧选择变量和数据处理方法，然后点击更新图表")
+            st.info("请在左侧选择变量和数据处理方法")
     
     # 添加描述性统计表格
     st.markdown("### 描述性统计")

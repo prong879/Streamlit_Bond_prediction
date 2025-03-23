@@ -50,7 +50,7 @@ def normalize_column_names(df):
         'Open': ['open', 'open_price', 'opening', 'first', 'first_price'],
         'High': ['high', 'high_price', 'highest', 'max', 'maximum', 'highest_price'],
         'Low': ['low', 'low_price', 'lowest', 'min', 'minimum', 'lowest_price'],
-        'Close': ['close', 'close_price', 'closing', 'last', 'last_price', 'close/last', 'adj_close', 'adjusted_close'],
+        'Close': ['close', 'close_price', 'closing', 'last', 'last_price', 'close/last', 'adj_close', 'adjusted_close', "p", "price", "y"],
         'Volume': ['volume', 'vol', 'quantity', 'turnover', 'trade_volume', 'trading_volume']
     }
     
@@ -96,6 +96,32 @@ def normalize_column_names(df):
         df = df.rename(columns=column_mapping)
         
     return df, rename_info
+
+def sort_by_date(df):
+    """
+    确保数据按日期升序排列（由远及近）
+    
+    参数:
+        df (DataFrame): 包含日期列的数据框
+        
+    返回:
+        DataFrame: 按日期排序后的数据框
+    """
+    # 检查是否有Date列
+    if 'Date' in df.columns:
+        # 确保Date列是日期时间格式
+        if not pd.api.types.is_datetime64_any_dtype(df['Date']):
+            try:
+                df['Date'] = pd.to_datetime(df['Date'])
+            except Exception as e:
+                st.warning(f"日期格式转换失败: {e}，将保持原始排序")
+                return df
+        
+        # 按日期升序排列
+        df = df.sort_values(by='Date', ascending=True)
+        st.info("数据已按日期从过去到现在（升序）排列")
+    
+    return df
 
 def calculate_ma(df, periods=[5, 10, 20, 30]):
     """
@@ -261,6 +287,10 @@ def load_example_data():
         data_path = os.path.join("data", "example", "stock_data.csv")
         df = pd.read_csv(data_path)
         df['Date'] = pd.to_datetime(df['Date'])
+        
+        # 确保数据按日期升序排列
+        df = df.sort_values(by='Date', ascending=True)
+        
         return df
     except Exception as e:
         st.error(f"加载示例数据失败：{str(e)}")
@@ -393,10 +423,7 @@ def create_echarts_kline_volume(df, selected_mas=[]):
     返回:
         dict: ECharts配置项字典
     """
-    # 确保数据按日期排序（从旧到新）
-    if 'Date' in df.columns:
-        df = df.sort_values(by='Date')
-    
+    # 假设数据已经由sort_by_date函数进行了排序，这里不需要再次排序
     # 转换日期格式
     dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
     
@@ -663,6 +690,9 @@ if data_source == "上传数据":
             if 'Date' in df.columns:
                 df['Date'] = pd.to_datetime(df['Date'])
             
+            # 确保数据按日期升序排序
+            df = sort_by_date(df)
+            
             # 存储到session state
             set_state('raw_data', df)
             # 记录数据加载时间戳
@@ -676,6 +706,9 @@ else:
         df, rename_info = normalize_column_names(df)
         if rename_info:
             st.info(f"已自动标准化以下列名: {', '.join(rename_info)}")
+        
+        # 确保数据按日期升序排序
+        df = sort_by_date(df)
         
         set_state('raw_data', df)
         # 记录数据加载时间戳
@@ -779,12 +812,10 @@ if missing_cols_ohlc:
     if 'Close' in df.columns and 'Date' in df.columns:
         st.info("已检测到收盘价数据，将显示收盘价折线图。")
         
-        # 确保数据按日期排序（从旧到新）
-        df_sorted = df.sort_values(by='Date')
-        
+        # 假设数据已经由sort_by_date函数进行了排序，这里不需要再次排序
         # 创建简单的收盘价折线图配置
-        dates = df_sorted['Date'].dt.strftime('%Y-%m-%d').tolist()
-        close_data = df_sorted['Close'].round(3).tolist()
+        dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
+        close_data = df['Close'].round(3).tolist()
         
         line_option = {
             "title": {

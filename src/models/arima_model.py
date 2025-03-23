@@ -785,82 +785,83 @@ def inverse_diff(original_data, diff_df, d=1, log_diff=False):
 # 创建时间序列折线图的echarts选项
 def create_timeseries_chart(df, title='时间序列图', series_names=None):
     """
-    创建时间序列折线图的echarts选项
+    创建时间序列图的echarts选项
     
     参数:
     df: DataFrame，包含要绘制的时间序列数据
     title: 图表标题
-    series_names: 要绘制的列名列表，如果为None则绘制所有列
+    series_names: 系列名称列表，如果为None则使用df的列名
     
     返回:
     dict: echarts图表选项
     """
-    # 如果输入是Series，转换为DataFrame
-    if isinstance(df, pd.Series):
-        df = pd.DataFrame({df.name if df.name else "值": df})
+    # 假设数据已经在导入时按日期排序，这里只对尚未排序的数据进行处理
+    # 如果数据索引是日期类型但尚未排序，则进行排序
+    if isinstance(df.index, pd.DatetimeIndex) and not df.index.is_monotonic_increasing:
+        df = df.sort_index()
+    # 如果有Date列但尚未排序，则进行排序
+    elif 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+        df = df.sort_values(by='Date')
     
-    # 如果没有指定要绘制的列，则使用所有列
-    if series_names is None:
-        series_names = df.columns.tolist()
-    
-    # 检查df的索引类型，决定x轴类型
-    is_date_index = isinstance(df.index, pd.DatetimeIndex)
-    
-    # 准备x轴数据
-    if is_date_index:
-        # 根据数据长度选择合适的日期格式
-        if len(df) > 365:  # 超过一年的数据
-            date_format = '%Y-%m'  # 年-月
-        elif len(df) > 31:  # 超过一个月的数据
-            date_format = '%m-%d'  # 月-日
+    # 准备X轴数据
+    if isinstance(df.index, pd.DatetimeIndex):
+        # 使用日期索引
+        dates = df.index.strftime('%Y-%m-%d').tolist()
+        x_data = dates
+    elif 'Date' in df.columns:
+        # 使用Date列
+        if pd.api.types.is_datetime64_any_dtype(df['Date']):
+            dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
         else:
-            date_format = '%m-%d %H:%M'  # 月-日 时:分
-        
-        x_data = df.index.strftime(date_format).tolist()
-        x_axis_type = 'category'
+            # 如果Date不是日期类型，尝试转换
+            try:
+                dates = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d').tolist()
+            except:
+                dates = df['Date'].astype(str).tolist()
+        x_data = dates
     else:
-        # 尝试将索引转换为日期时间类型
-        try:
-            # 检查索引是否可以转换为日期时间
-            date_index = pd.to_datetime(df.index)
-            # 如果可以，使用转换后的日期索引
-            if len(df) > 365:  # 超过一年的数据
-                date_format = '%Y-%m'  # 年-月
-            elif len(df) > 31:  # 超过一个月的数据
-                date_format = '%m-%d'  # 月-日
-            else:
-                date_format = '%m-%d %H:%M'  # 月-日 时:分
-            
-            x_data = date_index.strftime(date_format).tolist()
-            x_axis_type = 'category'
-        except:
-            # 如果无法转换，使用数字索引
-            x_data = list(range(len(df)))
-            x_axis_type = 'value'
+        # 如果没有日期列，使用数字索引
+        x_data = list(range(len(df)))
     
     # 准备系列数据
-    series = []
-    for name in series_names:
-        if name in df.columns:
-            # 确保数据是数值类型
-            series_data = df[name]
-            if not pd.api.types.is_numeric_dtype(series_data):
-                if pd.api.types.is_datetime64_any_dtype(series_data):
-                    # 将日期时间转换为时间戳
-                    series_data = (series_data - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
-                else:
-                    # 跳过非数值类型的列
-                    continue
-            
-            # 处理系列配置
-            series_item = {
-                'name': name,
-                'type': 'line',
-                'data': series_data.fillna("").tolist(),  # 填充NaN为空字符串
-                'showSymbol': False,  # 隐藏线上的点，使图表更干净
-                'smooth': True,       # 使线条平滑
-            }
-            series.append(series_item)
+    series_list = []
+    
+    # 如果df是DataFrame，绘制每一列
+    if isinstance(df, pd.DataFrame):
+        # 确定要绘制的列
+        if 'Date' in df.columns:
+            columns = [col for col in df.columns if col != 'Date']
+        else:
+            columns = df.columns
+        
+        # 使用指定的系列名称（如果提供）
+        if series_names is not None:
+            if len(series_names) != len(columns):
+                # 如果提供的名称数量与列数不匹配，使用默认名称
+                series_names = columns
+        else:
+            series_names = columns
+        
+        # 为每个列创建一个系列
+        for i, column in enumerate(columns):
+            if pd.api.types.is_numeric_dtype(df[column]):
+                series_list.append({
+                    'name': series_names[i],
+                    'type': 'line',
+                    'data': df[column].round(3).tolist(),
+                    'smooth': True,
+                    'showSymbol': False
+                })
+    else:
+        # 如果df是Series，只绘制一个系列
+        series_name = df.name if df.name else '数据'
+        series_list.append({
+            'name': series_name,
+            'type': 'line',
+            'data': df.round(3).tolist(),
+            'smooth': True,
+            'showSymbol': False
+        })
     
     # 创建echarts选项
     option = {
@@ -869,41 +870,54 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
             'left': 'center'
         },
         'tooltip': {
-            "position": "bottom",
-            'trigger': 'axis'
-        },
-        'legend': {
-            'data': [name for name in series_names if name in df.columns],
-            'top': '7%'
+            'trigger': 'axis',
+            'axisPointer': {
+                'type': 'shadow'
+            }
         },
         'grid': {
             'left': '3%',
             'right': '4%',
-            'bottom': '13%',
+            'bottom': '12%',
             'containLabel': True
         },
         'xAxis': {
-            'type': x_axis_type,
+            'type': 'category',
             'data': x_data,
             'boundaryGap': False,
             'axisLabel': {
-                'rotate': 45 if len(x_data) > 10 else 0  # 当数据点较多时旋转标签
+                'rotate': 45,
+                'interval': 'auto'
             }
         },
         'yAxis': {
-            'type': 'value',
-            'scale': True,
-            'name': name if len(series_names) == 1 else ''
+            "scale": True,           # 主图Y轴
+            'type': 'value'
         },
-        'series': series,
+        'series': series_list,
         'dataZoom': [
             {
+                'type': 'inside',
+                'start': 0,
+                'end': 100
+            },
+            {
                 'type': 'slider',
-                'show': len(df) > 30,  # 当数据点较多时显示缩放控件
                 'start': 0,
                 'end': 100
             }
-        ]
+        ],
+        'toolbox': {
+            'show': True,
+            'feature': {
+                'saveAsImage': {
+                    'show': True,
+                    'title': '保存为图片',
+                    'type': 'png'
+                }
+            },
+            'right': '2%'
+        }
     }
     
     return option
