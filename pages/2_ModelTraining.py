@@ -341,32 +341,54 @@ with model_tabs[0]:
                 # 显示相关性数据表格
                 st.dataframe(corr_data, hide_index=True)
                 
-                # 检查high_correlation_features是否为空
-                if not high_correlation_features:
-                    st.warning("未找到符合相关性阈值的特征，将显示所有特征的相关性热力图。")
-                    correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
-                else:
-                    # 显示特征间相关性热力图
-                    st.write("特征间相关性热力图")
-                    correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
+                # 创建两列布局，使按钮和提示信息处于同一行
+                btn_col, info_col = st.columns([1, 5])
                 
-                # 确保热力图配置是有效的dictionary
-                if correlation_heatmap_option is None or not isinstance(correlation_heatmap_option, dict):
-                    st.error("生成热力图配置失败")
-                else:
-                    # 显示热力图
-                    try:
-                        st_echarts(
-                            options=correlation_heatmap_option,
-                            height="300px",
-                            width="100%"
-                        )
-                    except Exception as e:
-                        st.error(f"热力图渲染出错: {str(e)}")
-                        st.write("错误详情:")
-                        st.exception(e)
+                # 添加显示/隐藏热力图的按钮
+                with btn_col:
+                    show_corr_heatmap = st.button("显示/隐藏相关性热力图", key="toggle_corr_heatmap")
                 
-                st.success(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
+                # 在右侧列显示相关信息
+                with info_col:
+                    if not high_correlation_features:
+                        st.warning("未找到符合相关性阈值的特征，将显示所有特征的相关性热力图")
+                    else:
+                        st.success(f"相关性筛选出的特征 (|相关性| > {correlation_threshold}): {high_correlation_features}")
+                
+                # 初始化session state中的热力图显示状态
+                if 'show_corr_heatmap' not in st.session_state:
+                    st.session_state['show_corr_heatmap'] = False
+                
+                # 切换显示状态
+                if show_corr_heatmap:
+                    st.session_state['show_corr_heatmap'] = not st.session_state['show_corr_heatmap']
+                
+                # 根据显示状态渲染热力图
+                if st.session_state['show_corr_heatmap']:
+                    # 检查high_correlation_features是否为空
+                    if not high_correlation_features:
+                        correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
+                    else:
+                        # 显示特征间相关性热力图
+                        st.write("特征间相关性热力图")
+                        correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
+                    
+                    # 确保热力图配置是有效的dictionary
+                    if correlation_heatmap_option is None or not isinstance(correlation_heatmap_option, dict):
+                        st.error("生成热力图配置失败")
+                    else:
+                        # 显示热力图
+                        try:
+                            st_echarts(
+                                options=correlation_heatmap_option,
+                                height="300px",
+                                width="100%"
+                            )
+                        except Exception as e:
+                            st.error(f"热力图渲染出错: {str(e)}")
+                            st.write("错误详情:")
+                            st.exception(e)
+                
         
         # 2. VIF筛选展开框
         with st.expander("**VIF筛选**", expanded=False):
@@ -393,8 +415,10 @@ with model_tabs[0]:
                 
                 # 检查vif_data是否为空
                 if not vif_data.empty:
+                    # 显示VIF数据表格
                     st.dataframe(vif_data, hide_index=True)
                     st.success(f"VIF低于{vif_threshold}的特征: {low_vif_features}")
+
                 else:
                     st.warning("没有足够的特征进行VIF计算或多重共线性分析")
         
@@ -409,20 +433,39 @@ with model_tabs[0]:
                 sig_data = filter_results['significance']['data']
                 significant_features = filter_results['significance']['features']
                 
-                st.write("统计显著性分析")
                 if not sig_data.empty:
+                    # 显示统计显著性数据表格
                     st.dataframe(sig_data, hide_index=True)
-                    # 修改为只接收和渲染p值图表
-                    _, p_value_option = create_significance_charts(sig_data, p_value_threshold)
-                    st_echarts(
-                        options=p_value_option, 
-                        height="200px",
-                        width="100%"
-                    )
-                    if p_value_threshold > 0:
-                        st.success(f"P值低于{p_value_threshold}的特征: {significant_features}")
-                    else:
-                        st.warning("没有足够的特征进行统计显著性分析")
+                    
+                    # 创建两列布局，使按钮和提示信息处于同一行
+                    p_btn_col, p_info_col = st.columns([1, 7])
+                    
+                    # 添加显示/隐藏P值图的按钮
+                    with p_btn_col:
+                        show_p_value_chart = st.button("显示/隐藏P值图表", key="toggle_p_value_chart")
+                    
+                    # 在右侧列显示相关信息
+                    with p_info_col:
+                        if p_value_threshold > 0:
+                            st.success(f"P值低于{p_value_threshold}的特征: {significant_features}")
+                    
+                    # 初始化session state中的P值图显示状态
+                    if 'show_p_value_chart' not in st.session_state:
+                        st.session_state['show_p_value_chart'] = False
+                    
+                    # 切换显示状态
+                    if show_p_value_chart:
+                        st.session_state['show_p_value_chart'] = not st.session_state['show_p_value_chart']
+                    
+                    # 根据显示状态渲染P值图
+                    if st.session_state['show_p_value_chart']:
+                        # 修改为只接收和渲染p值图表
+                        _, p_value_option = create_significance_charts(sig_data, p_value_threshold)
+                        st_echarts(
+                            options=p_value_option, 
+                            height="200px",
+                            width="100%"
+                        )
                 else:
                     st.warning("没有足够的特征进行统计显著性分析")
         
