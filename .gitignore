@@ -1,7 +1,3 @@
-# 忽略README.md文件
-README.md
-@README.md
-
 # Python相关忽略
 __pycache__/
 *.py[cod]
