@@ -2,13 +2,18 @@
 ARIMA模型工具模块 - 实现ARIMA时间序列分析的各项功能
 
 该模块包含了实现ARIMA模型分析所需的各种函数:
-- 平稳性检验（ADF检验）
-- 随机性检验（Ljung-Box检验）
-- 正态性检验（JB检验、QQ图）
-- 自相关/偏自相关分析
-- 模型参数优化（BIC/AIC）
-- 模型拟合与预测
+- generate_descriptive_statistics：描述性统计，生成包含均值、中位数、标准差等统计量的表格
+- check_stationarity：平稳性检验，进行ADF检验判断序列是否平稳
+- diff_series：差分处理，对时间序列进行普通差分或对数差分处理
+- check_white_noise：白噪声检验，使用Ljung-Box检验判断序列是否为白噪声
+- analyze_acf_pacf, check_acf_pacf_pattern：自相关/偏自相关分析，分析ACF和PACF特性
+- find_best_arima_params：模型参数优化，基于AIC/BIC准则寻找最优ARIMA参数
+- fit_arima_model, check_residuals：模型拟合与残差诊断，拟合模型并分析残差
+- forecast_arima, evaluate_arima_model：预测与评估，进行预测并评估模型性能
+- inverse_diff：数据逆变换，将差分数据还原为原始尺度
+- create_timeseries_chart, create_histogram_chart, create_qq_plot, create_acf_pacf_charts：可视化工具，生成各类可视化图表
 """
+
 import numpy as np
 import pandas as pd
 import streamlit as st
