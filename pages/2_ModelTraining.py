@@ -681,23 +681,21 @@ with model_tabs[1]:
                 
                 # 平稳性检验结果展开框
                 with st.expander("ADF平稳性检验结果", expanded=True):
-                    ADF_col1, ADF_col2 = st.columns(2)
-                    with ADF_col1:
-                        st.metric(
-                            label="ADF统计量",
-                            value=f"{stationarity_results['ADF统计量']:.2f}"
-                        )
-                    with ADF_col2:
-                        st.metric(
-                            label="p值",
-                            value=f" {stationarity_results['p值']:.2f}"
-                        )
+                    
+                    st.metric(
+                        label="ADF统计量",
+                        value=f"{stationarity_results['ADF统计量']:.2f}"
+                    )
+                    st.metric(
+                        label="p值",
+                        value=f" {stationarity_results['p值']:.2f}"
+                    )
 
                     # 根据p值判断是否平稳
                     if is_stationary:
-                        st.success("序列平稳 (p值 < 0.05)")
+                        st.success("平稳的 (p值 < 0.05)")
                     else:
-                        st.warning("序列不平稳 (p值 >= 0.05)")
+                        st.warning("不平稳 (p值 >= 0.05)")
                 
                 # 正态性检验结果展开框
                 with st.expander("正态性检验结果", expanded=True):
@@ -712,7 +710,6 @@ with model_tabs[1]:
                         stat, p_value = stats.kstest(processed_data.dropna(), 'norm')
                         test_name = "Kolmogorov-Smirnov检验"
 
-                    # 显示正态检验结果
                     st.metric(
                         label=f"{test_name}统计量",
                         value=f"{stat:.2f}"
@@ -740,19 +737,14 @@ with model_tabs[1]:
                         first_lag_q = lb_df.iloc[0]['Q统计量']
                         first_lag_p = lb_df.iloc[0]['p值']
                         
-                        st.write("滞后阶数=1")
-
-                        LB_col1, LB_col2 = st.columns(2)
-                        with LB_col1:
-                            st.metric(
-                                label="Q统计量",
-                                value=f"{first_lag_q:.2f}"
-                            )
-                        with LB_col2:
-                            st.metric(
-                                label="p值",
-                                value=f"{first_lag_p:.2f}"
-                            )
+                        st.metric(
+                            label="Q统计量 (滞后阶数=1)",
+                            value=f"{first_lag_q:.2f}"
+                        )
+                        st.metric(
+                            label="p值 (滞后阶数=1)",
+                            value=f"{first_lag_p:.2f}"
+                        )
                         
                         # 根据p值判断是否为白噪声
                         if is_white_noise:
@@ -768,26 +760,31 @@ with model_tabs[1]:
                     try:
                         acf_pacf_pattern = check_acf_pacf_pattern(processed_data.dropna(), lags=30)
                         
+                        # 创建两列布局
+                        col1, col2 = st.columns(2)
+                        
                         # 显示ACF结果
-                        acf_pattern = acf_pacf_pattern["acf"]["pattern"]
-                        acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
+                        with col1:
+                            acf_pattern = acf_pacf_pattern["acf"]["pattern"]
+                            acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
+                            
+                            if acf_pattern == "截尾":
+                                st.success(f"ACF函数在{acf_cutoff}阶截尾")
+                            else:
+                                st.info("ACF函数呈拖尾特性")
                         
-                        if acf_pattern == "截尾":
-                            st.info(f"ACF: {acf_cutoff}阶截尾")
-                        else:
-                            st.info("ACF: 拖尾")
-                    
                         # 显示PACF结果
-                        pacf_pattern = acf_pacf_pattern["pacf"]["pattern"]
-                        pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
+                        with col2:
+                            pacf_pattern = acf_pacf_pattern["pacf"]["pattern"]
+                            pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
+                            
+                            if pacf_pattern == "截尾":
+                                st.success(f"PACF函数在{pacf_cutoff}阶截尾")
+                            else:
+                                st.info("PACF函数呈拖尾特性")
                         
-                        if pacf_pattern == "截尾":
-                            st.info(f"PACF: {pacf_cutoff}阶截尾")
-                        else:
-                            st.info("PACF: 拖尾")
-                        
-                        # 显示模型建议（简化）
-                        st.success(f"定阶参数建议: {acf_pacf_pattern['model_suggestion']}")
+                        # 显示模型建议
+                        st.info(f"模型建议: {acf_pacf_pattern['model_suggestion']}")
                         
                     except Exception as e:
                         st.error(f"无法执行自相关检测: {str(e)}")
@@ -832,7 +829,7 @@ with model_tabs[1]:
                         processed_data,
                         title=f"{selected_var} - 分布直方图"
                     )
-                    st_echarts(options=histogram_option, height="350px")
+                    st_echarts(options=histogram_option, height="400px")
                 except Exception as e:
                     st.error(f"无法绘制分布直方图: {str(e)}")
                 
@@ -842,7 +839,7 @@ with model_tabs[1]:
                         processed_data,
                         title=f"{selected_var} - QQ图"
                     )
-                    st_echarts(options=qq_option, height="400px")
+                    st_echarts(options=qq_option, height="450px")
                 except Exception as e:
                     st.warning(f"无法绘制QQ图: {str(e)}")
                 
