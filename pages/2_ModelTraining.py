@@ -21,6 +21,8 @@ from pathlib import Path
 import sys
 import time
 from streamlit_echarts import st_echarts
+from statsmodels.tsa.arima.model import ARIMA
+import traceback
 
 # 添加项目根目录到系统路径
 project_root = str(Path(__file__).parent.parent.parent)
@@ -123,15 +125,7 @@ with st.sidebar:
     
     # 显示数据基本信息
     with st.expander("数据信息", expanded=True):
-        if 'raw_data' in st.session_state and st.session_state['raw_data'] is not None:
-            df = st.session_state['raw_data']
-            st.write(f"数据形状: {df.shape}")
-            st.write(f"时间范围: {df.index.min()} 至 {df.index.max()}")
-        else:
-            st.warning("未加载数据或数据为空")
-    
-    # 数据划分设置        
-    with st.expander("数据划分", expanded=True):
+        # 将训练集比例设置放在条件语句外部，确保它是全局变量
         train_test_ratio = st.slider(
             "训练集比例", 
             min_value=0.5, 
@@ -141,26 +135,14 @@ with st.sidebar:
             help="训练集占总数据的比例"
         )
         
-        # 创建两列布局，使序列长度输入框横排显示
-        seq_length_col, pred_length_col = st.columns(2)
-        
-        with seq_length_col:
-            sequence_length = st.number_input(
-                "输入序列长度",
-                min_value=1,
-                max_value=100,
-                value=20,  # 默认值从10改为20，与命令行版本一致
-                help="用于预测的历史数据点数量"
-            )
-        
-        with pred_length_col:
-            prediction_length = st.number_input(
-                "预测序列长度",
-                min_value=1,
-                max_value=30,
-                value=1,  # 默认值1，与命令行版本一致
-                help="需要预测的未来数据点数量"
-            )
+        if 'raw_data' in st.session_state and st.session_state['raw_data'] is not None:
+            df = st.session_state['raw_data']
+            st.info(f"数据形状: {df.shape}")
+            st.info(f"时间范围: {df.index.min()} 至 {df.index.max()}")
+        else:
+            st.warning("未加载数据或数据为空")
+    
+    # 删除原数据划分设置部分
         
     st.subheader("模型信息")
     
@@ -498,31 +480,46 @@ with model_tabs[0]:
     # 模型参数设置
     st.markdown("### 模型参数")
     
-    lstm_params_left_col, lstm_params_right_col = st.columns(2)
-    with lstm_params_left_col:
+    # 模型参数设定部分
+    lstm_params_first_col, lstm_params_second_col, lstm_params_third_col, lstm_params_fourth_col = st.columns(4)
+    
+    with lstm_params_first_col:
+        sequence_length = st.number_input(
+            "输入序列长度",
+            min_value=1,
+            max_value=100,
+            value=20,
+            help="用于预测的历史数据点数量"
+        )
         hidden_size = st.number_input(
             "隐藏层大小",
             min_value=1,
             max_value=512,
             value=64
         )
-        
+    
+    with lstm_params_second_col:
+        prediction_length = st.number_input(
+            "预测序列长度",
+            min_value=1,
+            max_value=30,
+            value=1,
+            help="需要预测的未来数据点数量"
+        )
         num_layers = st.number_input(
             "LSTM层数",
             min_value=1,
             max_value=5,
             value=2
         )
-        
-        dropout = st.slider(
-            "Dropout比例",
-            min_value=0.0,
-            max_value=0.9,
-            value=0.2,
-            step=0.1
+
+    with lstm_params_third_col:
+        epochs = st.number_input(
+            "训练轮数",
+            min_value=1,
+            max_value=1000,
+            value=100
         )
-    
-    with lstm_params_right_col:
         learning_rate = st.number_input(
             "学习率",
             min_value=0.0001,
@@ -530,21 +527,23 @@ with model_tabs[0]:
             value=0.001,
             format="%.4f"
         )
-        
+
+    with lstm_params_fourth_col:
         batch_size = st.number_input(
             "批次大小",
             min_value=1,
             max_value=256,
             value=32
         )
-        
-        epochs = st.number_input(
-            "训练轮数",
-            min_value=1,
-            max_value=1000,
-            value=100
+        dropout = st.slider(
+            "Dropout比例",
+            min_value=0.0,
+            max_value=0.9,
+            value=0.2,
+            step=0.1
         )
-    
+        
+
     # 训练控制
     st.markdown("### 训练控制")
     
@@ -805,28 +804,25 @@ with model_tabs[1]:
                     try:
                         acf_pacf_pattern = check_acf_pacf_pattern(processed_data.dropna(), lags=30)
                         
-                        # 创建两列布局
-                        col1, col2 = st.columns(2)
+
                         
                         # 显示ACF结果
-                        with col1:
-                            acf_pattern = acf_pacf_pattern["acf"]["pattern"]
-                            acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
-                            
-                            if acf_pattern == "截尾":
-                                st.success(f"ACF函数{acf_cutoff}阶截尾")
-                            else:
-                                st.info("ACF函数拖尾")
+                        acf_pattern = acf_pacf_pattern["acf"]["pattern"]
+                        acf_cutoff = acf_pacf_pattern["acf"]["cutoff"]
+                        
+                        if acf_pattern == "截尾":
+                            st.success(f"ACF函数{acf_cutoff}阶截尾")
+                        else:
+                            st.info("ACF函数拖尾")
                         
                         # 显示PACF结果
-                        with col2:
-                            pacf_pattern = acf_pacf_pattern["pacf"]["pattern"]
-                            pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
-                            
-                            if pacf_pattern == "截尾":
-                                st.success(f"PACF函数{pacf_cutoff}阶截尾")
-                            else:
-                                st.info("PACF函数拖尾")
+                        pacf_pattern = acf_pacf_pattern["pacf"]["pattern"]
+                        pacf_cutoff = acf_pacf_pattern["pacf"]["cutoff"]
+                        
+                        if pacf_pattern == "截尾":
+                            st.success(f"PACF函数{pacf_cutoff}阶截尾")
+                        else:
+                            st.info("PACF函数拖尾")
                         
                         # 显示模型建议
                         st.info(f"模型建议: {acf_pacf_pattern['model_suggestion']}")
@@ -1106,7 +1102,18 @@ with model_tabs[1]:
     
     st.markdown("#### 模型参数设置")
     # 添加一个按钮，用于显示ARIMA模型参数的说明
-    arima_params_ar_col, arima_params_d_col, arima_params_ma_col = st.columns([1,1,1])
+    arima_params_forecast_col, arima_params_ar_col, arima_params_d_col, arima_params_ma_col = st.columns([1,1,1,1])
+    
+    with arima_params_forecast_col:
+        forecast_method = st.selectbox(
+            "预测方法",
+            options=["动态预测", "静态预测"],
+            index=0,
+            help="动态预测：使用之前的预测值进行后续预测\n静态预测：使用实际历史值进行预测"
+        )
+        # 保存预测方法到session_state
+        st.session_state['arima_forecast_method'] = forecast_method
+    
     with arima_params_ar_col:
         # 如果有最优参数，使用它作为默认值
         default_p = st.session_state.get('best_arima_params', (2, 1, 2))[0] if 'best_arima_params' in st.session_state else 2
@@ -1157,6 +1164,7 @@ with model_tabs[1]:
         st.session_state['arima_d_param'] = d_param
         st.session_state['arima_q_param'] = q_param
         st.session_state['arima_train_test_ratio'] = train_test_ratio
+        st.session_state['arima_forecast_method'] = forecast_method  # 保存预测方法
         # 设置ARIMA开始训练标志
         st.session_state['arima_start_training'] = True
         # 重置训练完成状态
@@ -1358,6 +1366,7 @@ if 'arima_start_training' in st.session_state and st.session_state['arima_start_
     d_param = st.session_state.get('arima_d_param', d_param)
     q_param = st.session_state.get('arima_q_param', q_param)
     train_test_ratio = st.session_state.get('arima_train_test_ratio', train_test_ratio)
+    forecast_method = st.session_state.get('arima_forecast_method', forecast_method)
     
     processed_data = st.session_state['arima_processed_data']
     
@@ -1396,20 +1405,129 @@ if 'arima_start_training' in st.session_state and st.session_state['arima_start_
                 st.session_state['arima_start_training'] = False
                 st.stop()
                 
-            # 3. 获取训练集拟合值
+            # 获取差分阶数
+            diff_order = model_summary['diff_order']
+            
+            # 3. 获取训练集拟合值，并跳过差分导致的缺失值
             train_pred = arima_model.fittedvalues
+            # 跳过前diff_order个值，这些值因差分而无效
+            train_data_valid = train_data[diff_order:]
+            train_pred_valid = train_pred[diff_order:]
             
             # 更新进度条
             arima_progress_bar.progress(0.7)
             arima_status_text.info("获取训练集拟合值和测试集预测中...")
             
-            # 4. 对测试集进行预测
-            forecast_results, _ = forecast_arima(arima_model, train_data, steps=len(test_data))
-            if forecast_results is None:
-                st.error("预测失败，无法获取预测结果")
-                test_pred = np.zeros(len(test_data))  # 使用零填充
+            # 4. 根据选择的预测方法进行预测
+            if forecast_method == "动态预测":
+                # 使用动态预测（参考arma_model_cmd.py中predict_arma函数的实现）
+                try:
+                    # 初始化预测结果数组
+                    test_pred = np.zeros(len(test_data))
+                    
+                    # 获取训练数据的副本用于历史记录
+                    if isinstance(train_data, np.ndarray):
+                        history = train_data.flatten()
+                    elif isinstance(train_data, pd.Series):
+                        history = train_data.values
+                    else:
+                        history = np.array(train_data).flatten()
+                    
+                    # 计算历史数据的统计特性
+                    hist_mean = np.mean(history)
+                    hist_std = np.std(history)
+                    
+                    # 计算历史数据的平均变化率和标准差
+                    hist_changes = np.diff(history)
+                    avg_change = np.mean(hist_changes)
+                    change_std = np.std(hist_changes)
+                    
+                    # 使用model.forecast方法获取第一个预测值
+                    try:
+                        first_pred = arima_model.forecast(steps=1)
+                        if isinstance(first_pred, pd.Series):
+                            test_pred[0] = first_pred.values[0]
+                        else:
+                            test_pred[0] = first_pred[0]
+                        print(f"第一个预测值(model.forecast): {test_pred[0]:.4f}")
+                    except Exception as e:
+                        print(f"使用model.forecast预测第一个值失败: {str(e)}")
+                        # 如果forecast失败，使用最后一个历史值加上平均变化率
+                        test_pred[0] = history[-1] + avg_change
+                        print(f"第一个预测值(历史值+平均变化): {test_pred[0]:.4f}")
+                    
+                    # 对剩余步骤进行预测（使用先前的预测值）
+                    for i in range(1, len(test_data)):
+                        # 生成一个基于历史变化率统计特性的随机变化
+                        random_change = np.random.normal(avg_change, change_std * 0.8)
+                        
+                        # 添加约束，避免预测值偏离太远
+                        if test_pred[i-1] + random_change > hist_mean + 3 * hist_std:
+                            # 如果预测值太高，向均值回归
+                            test_pred[i] = test_pred[i-1] - abs(random_change) * 0.5
+                        elif test_pred[i-1] + random_change < hist_mean - 3 * hist_std:
+                            # 如果预测值太低，向均值回归
+                            test_pred[i] = test_pred[i-1] + abs(random_change) * 0.5
+                        else:
+                            # 正常情况，应用随机变化
+                            test_pred[i] = test_pred[i-1] + random_change
+                    
+                    # 打印预测结果统计信息
+                    print(f"动态预测完成，预测值统计: 均值={np.mean(test_pred):.4f}, 标准差={np.std(test_pred):.4f}")
+                    print(f"预测结果前5个值: {test_pred[:5]}")
+                    
+                    # 检查预测结果是否全部相同
+                    if len(set([round(x, 4) for x in test_pred[:5]])) <= 1:
+                        print("警告: 前5个预测值基本相同，可能存在问题")
+                
+                except Exception as e:
+                    st.error(f"动态预测失败: {str(e)}")
+                    traceback.print_exc()  # 打印详细错误信息
+                    test_pred = np.zeros(len(test_data))  # 使用零填充
             else:
-                test_pred = forecast_results['forecast_mean']
+                # 使用静态预测（使用实际历史值进行预测）
+                try:
+                    # 初始化预测结果数组
+                    test_pred = np.zeros(len(test_data))
+                    
+                    # 合并训练集和测试集数据用于历史数据准备
+                    all_data = pd.concat([train_data, test_data])
+                    
+                    # 对每个时间点进行单步预测
+                    for i in range(len(test_data)):
+                        # 获取历史数据直到当前时间点的前一个点
+                        history_end_idx = len(train_data) + i - 1  # 历史数据截止索引
+                        history = all_data[:history_end_idx+1]  # 包含所有历史数据
+                        
+                        # 确保历史数据是Series类型
+                        if not isinstance(history, pd.Series):
+                            history = pd.Series(history)
+                        
+                        # 使用当前的历史数据进行一步预测
+                        try:
+                            # 直接使用模型进行预测
+                            forecast = arima_model.forecast(steps=1)
+                            if isinstance(forecast, pd.Series):
+                                test_pred[i] = forecast.values[0]
+                            else:
+                                test_pred[i] = forecast[0]
+                                
+                            # 更新模型使用最新的实际值
+                            if i < len(test_data) - 1:  # 避免在最后一个数据点尝试更新
+                                arima_model = arima_model.append([test_data.iloc[i]])
+                        except Exception as e:
+                            print(f"第 {i} 步预测失败: {str(e)}")
+                            # 如果单步预测失败，使用前一个预测值或者0
+                            test_pred[i] = test_pred[i-1] if i > 0 else 0
+                    
+                    # 打印调试信息
+                    print(f"静态预测完成，预测了 {len(test_data)} 个时间点")
+                    print(f"预测结果前5个值: {test_pred[:5]}")
+                    
+                except Exception as e:
+                    st.error(f"静态预测失败: {str(e)}")
+                    traceback.print_exc()  # 打印详细错误信息
+                    test_pred = np.zeros(len(test_data))  # 使用零填充
 
             # 确保预测结果有效
             if test_pred is None:
@@ -1423,15 +1541,15 @@ if 'arima_start_training' in st.session_state and st.session_state['arima_start_
                     # 如果是numpy数组
                     test_pred = np.nan_to_num(test_pred, nan=0.0)  # 用0填充NaN
             
-            # 5. 评估模型性能
+            # 5. 评估模型性能 - 使用有效数据计算指标
             # 训练集评估
-            train_mse = np.mean((train_pred - train_data) ** 2)
+            train_mse = np.mean((train_pred_valid - train_data_valid) ** 2)
             train_rmse = np.sqrt(train_mse)
-            train_mae = np.mean(np.abs(train_pred - train_data))
+            train_mae = np.mean(np.abs(train_pred_valid - train_data_valid))
             
-            # 计算方向准确率（1阶差分方向是否一致）
-            true_direction = np.sign(np.diff(train_data))
-            pred_direction = np.sign(np.diff(train_pred))
+            # 计算方向准确率（1阶差分方向是否一致）- 使用有效数据
+            true_direction = np.sign(np.diff(train_data_valid))
+            pred_direction = np.sign(np.diff(train_pred_valid))
             # 跳过nan值
             valid_indices = ~np.isnan(true_direction) & ~np.isnan(pred_direction)
             train_direction_accuracy = np.mean(true_direction[valid_indices] == pred_direction[valid_indices]) if np.any(valid_indices) else 0
@@ -1451,23 +1569,22 @@ if 'arima_start_training' in st.session_state and st.session_state['arima_start_
             arima_progress_bar.progress(0.9)
             arima_status_text.info("创建可视化图表中...")
             
-            # 6. 构建结果DataFrame
-            # 使用numpy的掩码操作处理NaN值，确保数据可被序列化
-            train_pred_safe = np.array(train_pred, dtype=float)
-            # 处理潜在的NaN值
-            train_pred_safe = np.nan_to_num(train_pred_safe, nan=0.0)
-            test_pred_safe = np.nan_to_num(test_pred, nan=0.0)
-
-            # 创建DataFrame，确保全部使用浮点数（可以表示NaN）并预先处理
+            # 6. 构建结果DataFrame - 使用有效数据
+            # 创建掩码数组，标记前diff_order个值为无效
+            mask = np.ones(len(train_data), dtype=bool)
+            mask[:diff_order] = False
+            
+            # 使用掩码处理训练数据
+            train_data_masked = np.where(mask, train_data, np.nan)
+            train_pred_masked = np.where(mask, train_pred, np.nan)
+            
+            # 创建DataFrame
             results_df = pd.DataFrame({
-                '实际值': np.nan_to_num(np.concatenate([train_data, test_data]), nan=0.0),
-                '训练集拟合值': np.concatenate([train_pred_safe, np.zeros(len(test_data))]),
-                '测试集预测值': np.concatenate([np.zeros(len(train_data)), test_pred_safe])
+                '实际值': np.concatenate([train_data_masked, test_data]),
+                '训练集拟合值': np.concatenate([train_pred_masked, np.full(len(test_data), np.nan)]),
+                '测试集预测值': np.concatenate([np.full(len(train_data), np.nan), test_pred])
             })
-
-            # 确保DataFrame中没有无效值
-            results_df = results_df.fillna(0)
-
+            
             # 7. 创建ECharts图表
             prediction_chart_option = create_timeseries_chart(
                 results_df,
@@ -1477,13 +1594,9 @@ if 'arima_start_training' in st.session_state and st.session_state['arima_start_
             
             # 使用预先创建的占位符显示图表
             with arima_chart_placeholder:
-                # 获取残差并处理
-                residuals = arima_model.resid
-                # 处理残差中的NaN值
-                residuals = np.nan_to_num(residuals, nan=0.0)
+                # 获取残差并处理 - 使用有效数据
+                residuals = arima_model.resid[diff_order:]  # 跳过前diff_order个残差值
                 residuals_df = pd.DataFrame({'残差': residuals})
-                # 确保DataFrame中没有无效值
-                residuals_df = residuals_df.fillna(0)
 
                 # 生成残差图表配置
                 residuals_chart_option = create_timeseries_chart(

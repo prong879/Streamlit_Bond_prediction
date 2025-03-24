@@ -173,49 +173,45 @@ def diff_series(series, diff_order=1, log_diff=False):
         else:
             raise TypeError(f"无法处理类型为 {series.dtype} 的数据，需要数值类型数据")
     
+    # 确保输入是pandas Series并具有索引
+    if not isinstance(series, pd.Series):
+        if isinstance(series, np.ndarray):
+            series = pd.Series(series)
+        else:
+            series = pd.Series(series)
+    
+    # 如果没有日期索引，创建一个日期索引
+    if not isinstance(series.index, pd.DatetimeIndex):
+        # 使用日频率创建日期索引，从今天开始往前数
+        end_date = pd.Timestamp.today()
+        start_date = end_date - pd.Timedelta(days=len(series)-1)
+        series.index = pd.date_range(start=start_date, end=end_date, periods=len(series))
+    
     # 如果是对数差分，先取对数再差分
     if log_diff:
         if (series <= 0).any():
             # 如果数据包含非正值，给出警告并使用普通差分
+            st.warning("数据包含非正值，无法进行对数差分，将使用普通差分")
             log_diff = False
-            diff_data = series.diff(diff_order).dropna()
+            diff_data = series.diff(diff_order)
             diff_type = f"{diff_order}阶普通差分"
         else:
             # 进行对数差分
             log_series = np.log(series)
-            diff_data = log_series.diff(diff_order).dropna()
+            diff_data = log_series.diff(diff_order)
             diff_type = f"{diff_order}阶对数差分"
     else:
         # 进行普通差分
-        diff_data = series.diff(diff_order).dropna()
+        diff_data = series.diff(diff_order)
         diff_type = f"{diff_order}阶普通差分"
     
-    # 准备用于Streamlit绘图的数据
-    if isinstance(series, pd.Series):
-        # 如果原始数据有日期索引，保留它
-        index_series = series.index
-        index_diff = diff_data.index
-        
-        # 创建对比图表的数据框
-        # 创建含 None 的列表，长度为差分阶数
-        none_list = [0] * diff_order  # 使用0代替None
-        df = pd.DataFrame({
-            '原始序列': pd.Series(series.values, index=index_series),
-            f'{diff_type}序列': pd.Series(none_list + diff_data.values.tolist(), index=index_series)
-        })
-    else:
-        # 如果没有日期索引，使用默认的数字索引
-        index = range(len(series))
-        diff_index = range(diff_order, len(series))
-        
-        # 创建对比图表的数据框
-        # 使用0代替None，确保JSON序列化不会出错
-        df = pd.DataFrame({
-            '原始序列': series,
-            f'{diff_type}序列': [0] * diff_order + diff_data.tolist()
-        }, index=index)
+    # 创建对比图表的数据框
+    df = pd.DataFrame({
+        '原始序列': series,
+        f'{diff_type}序列': diff_data
+    })
     
-    return diff_data, df
+    return diff_data.dropna(), df
 
 # 检查白噪声
 def check_white_noise(series):
@@ -440,14 +436,27 @@ def fit_arima_model(timeseries, order):
     model_summary: 模型摘要信息
     """
     try:
-        # 确保原始数据为一维数组
+        # 确保数据是pandas Series并具有正确的索引
         if isinstance(timeseries, pd.DataFrame):
-            timeseries = timeseries.values.flatten()
+            timeseries = timeseries.iloc[:, 0]
+        elif not isinstance(timeseries, pd.Series):
+            timeseries = pd.Series(timeseries)
+        
+        # 如果没有日期索引，创建一个日期索引
+        if not isinstance(timeseries.index, pd.DatetimeIndex):
+            # 使用日频率创建日期索引，从今天开始往前数
+            end_date = pd.Timestamp.today()
+            start_date = end_date - pd.Timedelta(days=len(timeseries)-1)
+            timeseries.index = pd.date_range(start=start_date, end=end_date, periods=len(timeseries), freq='D')
+        else:
+            # 如果已经有日期索引但没有频率信息，设置频率为日频率
+            if timeseries.index.freq is None:
+                timeseries.index = pd.DatetimeIndex(timeseries.index).to_period('D').to_timestamp()
         
         # 根据order的长度判断是ARIMA还是SARIMA
         if len(order) == 3:
             # 拟合ARIMA模型
-            model = ARIMA(timeseries, order=order)
+            model = ARIMA(timeseries, order=order, freq='D')  # 明确指定频率为日频率
             model_fit = model.fit()
         else:
             # 拟合SARIMA模型
@@ -458,7 +467,8 @@ def fit_arima_model(timeseries, order):
                 order=(p, d, q), 
                 seasonal_order=(P, D, Q, s),
                 enforce_stationarity=False,
-                enforce_invertibility=False
+                enforce_invertibility=False,
+                freq='D'  # 明确指定频率为日频率
             )
             model_fit = model.fit(disp=False)
         
@@ -466,7 +476,9 @@ def fit_arima_model(timeseries, order):
         model_summary = {
             'AIC': model_fit.aic,
             'BIC': model_fit.bic,
-            'params': model_fit.params.to_dict()
+            'params': model_fit.params.to_dict(),
+            'order': order,  # 添加模型阶数信息
+            'diff_order': order[1] if len(order) == 3 else order[1] + order[4]  # 总差分阶数（普通差分 + 季节性差分）
         }
         
         return model_fit, model_summary
@@ -482,6 +494,8 @@ def fit_arima_model(timeseries, order):
                 'AIC': model_fit.aic,
                 'BIC': model_fit.bic,
                 'params': model_fit.params.to_dict(),
+                'order': (0, 1, 1),
+                'diff_order': 1,
                 'fallback': True
             }
             
