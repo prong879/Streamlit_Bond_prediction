@@ -29,6 +29,19 @@ from statsmodels.stats.outliers_influence import variance_inflation_factor
 from sklearn.feature_selection import SelectKBest, f_regression
 from streamlit_echarts import st_echarts
 
+# 检测可用设备
+def get_device():
+    """
+    检测并返回可用的设备（GPU/CPU）
+    
+    返回:
+        device: PyTorch设备对象
+    """
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    else:
+        return torch.device('cpu')
+
 # LSTM模型定义
 class LSTMModel(nn.Module):
     """
@@ -114,23 +127,29 @@ def train_lstm_model(X_train, y_train, X_val, y_val, model_params, training_para
         model: 训练好的模型
         history: 训练历史
     """
-    # 转换为PyTorch张量
-    X_train_tensor = torch.FloatTensor(X_train)
-    y_train_tensor = torch.FloatTensor(y_train)
-    X_val_tensor = torch.FloatTensor(X_val)
-    y_val_tensor = torch.FloatTensor(y_val)
+    # 获取设备(GPU/CPU)
+    device = get_device()
     
-    # 创建模型
+    # 转换为PyTorch张量并移动到适当的设备
+    X_train_tensor = torch.FloatTensor(X_train).to(device)
+    y_train_tensor = torch.FloatTensor(y_train).to(device)
+    X_val_tensor = torch.FloatTensor(X_val).to(device)
+    y_val_tensor = torch.FloatTensor(y_val).to(device)
+    
+    # 创建模型并移动到适当的设备
     model = LSTMModel(
         input_dim=model_params['input_dim'],
         hidden_dim=model_params['hidden_dim'],
         num_layers=model_params['num_layers'],
         output_dim=model_params['output_dim'],
         dropout=model_params.get('dropout', 0.3)
-    )
+    ).to(device)
+    
+    if status_text is not None:
+        status_text.text(f"模型将在{device}上训练")
     
     # 定义损失函数和优化器
-    criterion = nn.MSELoss()
+    criterion = nn.MSELoss().to(device)
     optimizer = torch.optim.Adam(
         model.parameters(), 
         lr=training_params['learning_rate'],
@@ -222,22 +241,29 @@ def evaluate_lstm_model(model, X_test, y_test, target_scaler=None):
     返回:
         评估指标字典
     """
+    # 获取设备(GPU/CPU)
+    device = get_device()
     model.eval()
+    
     with torch.no_grad():
-        X_test_tensor = torch.FloatTensor(X_test)
-        y_test_tensor = torch.FloatTensor(y_test)
+        X_test_tensor = torch.FloatTensor(X_test).to(device)
+        y_test_tensor = torch.FloatTensor(y_test).to(device)
         
         test_outputs = model(X_test_tensor)
         test_criterion = nn.MSELoss()
         test_loss = test_criterion(test_outputs, y_test_tensor)
         
+        # 将预测结果移回CPU进行反归一化处理
+        test_outputs_cpu = test_outputs.cpu().numpy()
+        y_test_cpu = y_test_tensor.cpu().numpy() if isinstance(y_test_tensor, torch.Tensor) else y_test
+        
         # 反归一化（如果提供了缩放器）
         if target_scaler is not None:
-            test_predictions = target_scaler.inverse_transform(test_outputs.numpy())
-            test_actual = target_scaler.inverse_transform(y_test)
+            test_predictions = target_scaler.inverse_transform(test_outputs_cpu)
+            test_actual = target_scaler.inverse_transform(y_test_cpu)
         else:
-            test_predictions = test_outputs.numpy()
-            test_actual = y_test
+            test_predictions = test_outputs_cpu
+            test_actual = y_test_cpu
         
         # 计算评估指标
         mse = np.mean((test_predictions - test_actual) ** 2)
@@ -323,10 +349,12 @@ def save_model(model, model_params, training_params, history, path="models"):
     # 生成时间戳
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     
-    # 保存模型
+    # 保存模型（确保模型在CPU上再保存）
     model_filename = f"lstm_model_{timestamp}.pth"
     model_path = os.path.join(path, model_filename)
-    torch.save(model.state_dict(), model_path)
+    # 将模型移动到CPU进行保存，确保跨设备兼容性
+    model_cpu = model.cpu()
+    torch.save(model_cpu.state_dict(), model_path)
     
     # 保存模型参数和训练历史
     params_filename = f"model_params_{timestamp}.json"
@@ -348,18 +376,23 @@ def save_model(model, model_params, training_params, history, path="models"):
     return model_path
 
 # 加载已保存的模型
-def load_model(model_path, params_path=None):
+def load_model(model_path, params_path=None, device=None):
     """
     加载已保存的模型
     
     参数:
         model_path: 模型文件路径
         params_path: 参数文件路径，如果为None则根据model_path推断
+        device: 指定加载到的设备，默认为自动检测
         
     返回:
         model: 加载的模型
         params_dict: 模型参数字典
     """
+    # 如果未提供设备，则自动检测
+    if device is None:
+        device = get_device()
+    
     # 如果未提供参数路径，则尝试推断
     if params_path is None:
         model_dir = os.path.dirname(model_path)
@@ -383,8 +416,9 @@ def load_model(model_path, params_path=None):
             dropout=model_params.get('dropout', 0.3)
         )
         
-        # 加载权重
-        model.load_state_dict(torch.load(model_path))
+        # 加载权重并将模型移至指定设备
+        model.load_state_dict(torch.load(model_path, map_location=device))
+        model = model.to(device)
         model.eval()  # 设置为评估模式
         
         return model, params_dict
@@ -470,6 +504,8 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
     返回:
         predictions: 预测结果
     """
+    # 获取设备(GPU/CPU)
+    device = get_device()
     model.eval()
     
     # 确保X的形状正确
@@ -477,8 +513,8 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
         # 如果输入是(序列长度, 特征数)，则添加批次维度
         X = X.reshape(1, X.shape[0], X.shape[1])
     
-    # 将输入转换为张量
-    X_tensor = torch.FloatTensor(X)
+    # 将输入转换为张量并移至适当设备
+    X_tensor = torch.FloatTensor(X).to(device)
     
     predictions = []
     current_input = X_tensor.clone()
@@ -487,7 +523,8 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
         for _ in range(n_steps):
             # 预测下一个值
             output = model(current_input)
-            prediction = output.numpy()
+            # 将预测结果移回CPU以便存储
+            prediction = output.cpu().numpy()
             predictions.append(prediction)
             
             # 如果需要多步预测，更新输入
@@ -496,7 +533,6 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
                 new_input = current_input.clone()
                 new_input[:, :-1, :] = current_input[:, 1:, :]
                 # 添加预测值（假设最后一个特征是预测目标）
-                # 注意：这里可能需要根据实际情况调整
                 new_input[:, -1, -1] = output[0, 0]
                 current_input = new_input
     
@@ -508,6 +544,7 @@ def predict_lstm(model, X, target_scaler=None, n_steps=1):
         predictions = target_scaler.inverse_transform(predictions)
     
     return predictions
+
 # 绘制预测结果对比图
 def plot_predictions(y_true, y_pred, title='预测结果对比', dates=None):
     """
@@ -575,11 +612,16 @@ def run_lstm_training(
     返回:
         训练结果字典，包含模型、评估指标等
     """
+    # 获取设备(GPU/CPU)
+    device = get_device()
+    
     # 如果提供了progress_placeholder，则创建进度条和状态文本
     if progress_placeholder is not None:
         with progress_placeholder.container():
             progress_bar = st.progress(0)
             status_text = st.empty()
+            # 显示使用的设备信息
+            status_text.info(f"将使用{device}进行模型训练")
     else:
         progress_bar = None
         status_text = None
@@ -648,30 +690,7 @@ def run_lstm_training(
     plot_training_history(history, loss_chart_placeholder)
     
     # 测试集评估
-    model.eval()
-    with torch.no_grad():
-        X_test_tensor = torch.FloatTensor(X_test)
-        y_test_tensor = torch.FloatTensor(y_test)
-        
-        test_outputs = model(X_test_tensor)
-        test_loss = nn.MSELoss()(test_outputs, y_test_tensor)
-        
-        # 反归一化预测结果用于展示
-        test_predictions = target_scaler.inverse_transform(test_outputs.numpy())
-        test_actual = target_scaler.inverse_transform(y_test)
-        
-        # 计算评估指标
-        mse = np.mean((test_predictions - test_actual) ** 2)
-        rmse = np.sqrt(mse)
-        mae = np.mean(np.abs(test_predictions - test_actual))
-        
-        # 计算方向准确率
-        if len(test_predictions) > 1:
-            pred_direction = np.sign(test_predictions[1:] - test_predictions[:-1])
-            actual_direction = np.sign(test_actual[1:] - test_actual[:-1])
-            direction_accuracy = np.mean(pred_direction == actual_direction)
-        else:
-            direction_accuracy = 0.0
+    evaluation_results = evaluate_lstm_model(model, X_test, y_test, target_scaler)
     
     # 保存模型
     model_path = save_model(model, model_params, training_params, history)
@@ -680,22 +699,17 @@ def run_lstm_training(
     return {
         'model': model,
         'history': history,
-        'metrics': {
-            'MSE': float(mse),
-            'RMSE': float(rmse),
-            'MAE': float(mae),
-            'Direction_Accuracy': float(direction_accuracy) if 'direction_accuracy' in locals() else None,
-            'Test_Loss': float(test_loss.item())
-        },
+        'metrics': evaluation_results,
         'model_path': model_path,
         'X_test': X_test,
         'y_test': y_test,
-        'test_predictions': test_predictions,
-        'test_actual': test_actual,
+        'test_predictions': evaluation_results.get('test_predictions', None),
+        'test_actual': evaluation_results.get('test_actual', None),
         'feature_scaler': feature_scaler,
         'target_scaler': target_scaler,
-        'sequence_length': sequence_length
-    } 
+        'sequence_length': sequence_length,
+        'device': str(device)  # 添加设备信息到结果
+    }
 
 # 特征筛选函数
 def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_threshold=0.05, target_col='Close'):

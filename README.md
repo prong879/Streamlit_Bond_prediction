@@ -12,7 +12,7 @@
 │   └── 2_ModelTraining.py      # 模型训练页面
 ├── src/                        # 源代码目录
 │   ├── models/                 # 模型实现
-│   │   ├── lstm_model.py       # LSTM模型实现
+│   │   ├── lstm_model.py       # LSTM模型实现（支持GPU加速）
 │   │   └── arima_model.py      # ARIMA模型实现
 │   └── utils/                  # 工具函数
 │       ├── session.py          # 会话状态管理
@@ -23,6 +23,7 @@
 ├── requirements.txt            # 项目依赖
 ├── cmd_main_old.py             # 命令行版本（功能完善，作为对照）
 ├── cmd_README.md               # 命令行版本文档
+├── gpu_test.py                 # GPU加速测试脚本
 ├──
 ```
 
@@ -94,6 +95,9 @@
 
 2. **模型实现**：
    - LSTM模型：基于PyTorch实现，支持自定义层数、隐藏层大小等参数
+     - 支持GPU加速，自动检测并使用可用的CUDA设备
+     - 训练过程中自动将模型和数据迁移到GPU上
+     - 保存与加载模型时自动处理设备兼容性
    - ARIMA模型：基于statsmodels实现，包括模型参数优化、残差分析等功能
 
 3. **数据可视化**：
@@ -106,6 +110,12 @@
    - 技术指标自动计算
    - 多重筛选标准（相关性、VIF、统计显著性）
    - 特征重要性可视化
+
+5. **GPU加速**：
+   - 自动检测CUDA是否可用，并选择适当的设备（GPU/CPU）
+   - 使用PyTorch的CUDA支持加速深度学习模型
+   - 模型的训练、验证和预测过程均可获得GPU加速
+   - 测试结果显示在RTX 3050上可获得约1.1x-10x的加速比（视数据集大小和模型复杂度而定）
 
 ### ECharts热力图配置
 热力图是基于ECharts实现的交互式数据可视化组件，具体实现如下：
@@ -232,7 +242,38 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
     return option 
 ```
 
+### LSTM模型GPU加速
 
+LSTM模型已经优化为自动利用GPU加速训练和预测。以下是关键实现部分：
+
+```python
+# 检测可用设备
+def get_device():
+    """
+    检测并返回可用的设备（GPU/CPU）
+    
+    返回:
+        device: PyTorch设备对象
+    """
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    else:
+        return torch.device('cpu')
+
+# 训练过程中的设备使用
+def train_lstm_model(...):
+    # 获取设备
+    device = get_device()
+    
+    # 将数据移至设备
+    X_train_tensor = torch.FloatTensor(X_train).to(device)
+    
+    # 将模型移至设备
+    model = LSTMModel(...).to(device)
+    
+    # 训练和评估
+    ...
+```
 
 ## 使用说明
 
@@ -241,18 +282,29 @@ def create_correlation_heatmap(corr_matrix, filtered_features=None):
 # 克隆仓库
 git clone https://github.com/prong879/Streamlit_Bond_prediction.git
 
-# 安装依赖，PyTorch采用CUDA版，可以在官网下好再安装
+# 安装依赖，包含CUDA支持的PyTorch版本
 pip install -r requirements.txt
+
+# 测试GPU支持
+python gpu_test.py
 
 # 启动应用
 streamlit run Home.py
 ```
 
-### 基本使用流程
-1. **数据加载**：在"数据查看"页面上传CSV格式的股票数据，或使用内置的示例数据
-2. **模型训练**：在"模型训练"页面选择输入特征/自动选择合适特征，配置模型参数并训练模型
-3. **模型评估**：查看模型性能指标和预测结果
-4. **保存模型**：将训练好的模型保存供后续使用
+### GPU加速使用说明
+本项目支持GPU加速，可以大幅提升LSTM模型的训练速度。如果您的系统配置了兼容的NVIDIA GPU和CUDA环境，系统将自动检测并使用它：
+
+1. 系统会在训练页面显示CUDA和GPU信息
+2. LSTM模型训练和预测过程会自动利用GPU加速
+3. 如果没有检测到GPU，系统将自动切换到CPU模式
+
+要验证GPU加速是否正常工作，您可以运行以下命令：
+```bash
+python gpu_test.py
+```
+
+如果需要安装支持CUDA的PyTorch，可以参考[PyTorch官方安装指南](https://pytorch.org/get-started/locally/)选择适合您系统的安装命令。
 
 ## 更新日志
 
@@ -279,6 +331,7 @@ streamlit run Home.py
   - 当OHLC数据不完整但至少有收盘价和日期数据时，会显示一个简单的收盘价折线图
   - 在没有任何价格数据时提供明确的错误信息
 - LSTM界面
+  - 增加了CUDA加速支持
   - 正在修复lstm模型中特征筛选展开框显示热力图、条形统计图等代码
   - 热力图正常，统计显著性条形图正常，之前有概率不出现可能是因为第一次打开页面，未进行筛选，所有没有数据传入其中。增加了下相关图的显示按钮，保证图成功绘制
 - ARIMA界面

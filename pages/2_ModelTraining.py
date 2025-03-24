@@ -87,6 +87,10 @@ st.set_page_config(
     layout="wide"
 )
 
+# 导入PyTorch
+import torch
+
+
 # 标题和简介
 st.title("模型训练")
 st.markdown("本页面用于配置和训练时间序列预测模型。选择合适的参数并开始训练过程。")
@@ -1174,6 +1178,28 @@ with st.expander("使用帮助"):
     - **d (差分阶数)**: 差分阶数，使序列平稳
     - **q (MA阶数)**: 移动平均项的阶数
     """)
+
+with st.expander("GPU加速信息",expanded=True):
+    CUDA_Version_col1, CUDA_Version_col2, CUDA_Version_col3 = st.columns(3)
+    with CUDA_Version_col1:
+        st.info(f"PyTorch版本: {torch.__version__}")
+
+    with CUDA_Version_col2:
+        st.info(f"CUDA版本: {torch.version.cuda}")
+
+    with CUDA_Version_col3:
+        st.info(f"CUDA是否可用: {torch.cuda.is_available()}")
+    
+    if torch.cuda.is_available():
+        CUDA_GPU_col1, CUDA_GPU_col2 = st.columns([5,6])
+        with CUDA_GPU_col1:
+            st.success(f"当前CUDA版本: {torch.version.cuda}；可用GPU数量: {torch.cuda.device_count()}")
+        with CUDA_GPU_col2:
+            for i in range(torch.cuda.device_count()):
+                st.success(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+    else:
+        st.warning("未检测到GPU，PyTorch将使用CPU模式运行")
+
 
 # lstm执行训练的逻辑
 if 'start_training' in st.session_state and st.session_state['start_training']:
