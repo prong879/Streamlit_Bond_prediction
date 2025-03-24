@@ -612,6 +612,37 @@ def forecast_arima(model, train_data, steps=10):
     # 进行预测
     forecast = model.forecast(steps=steps)
     
+    # 检查forecast的类型，处理不同的返回类型
+    if isinstance(forecast, pd.Series):
+        # 如果forecast是Series对象，直接使用它作为预测值
+        forecast_mean = forecast
+        
+        # 尝试获取置信区间，如果不可用，创建一个空的
+        try:
+            conf_int = model.get_forecast(steps=steps).conf_int()
+            lower_ci = conf_int.iloc[:, 0]
+            upper_ci = conf_int.iloc[:, 1]
+        except (AttributeError, ValueError):
+            # 如果无法获取置信区间，创建空的Series
+            forecast_index = pd.RangeIndex(start=len(train_data), stop=len(train_data) + steps)
+            lower_ci = pd.Series(np.nan, index=forecast_index)
+            upper_ci = pd.Series(np.nan, index=forecast_index)
+    else:
+        # 如果forecast具有predicted_mean属性（如statsmodels的预测结果）
+        try:
+            forecast_mean = forecast.predicted_mean
+            lower_ci = forecast.conf_int().iloc[:, 0]
+            upper_ci = forecast.conf_int().iloc[:, 1]
+        except AttributeError:
+            # 如果没有predicted_mean属性但有其他可用结构
+            print("使用简化的预测方法对测试集进行预测")
+            print(f"ARIMA模型参数: {model.order}")
+            # 假设forecast本身就是预测值
+            forecast_mean = forecast
+            forecast_index = pd.RangeIndex(start=len(train_data), stop=len(train_data) + steps)
+            lower_ci = pd.Series(np.nan, index=forecast_index)
+            upper_ci = pd.Series(np.nan, index=forecast_index)
+    
     # 构建预测结果的DataFrame
     if has_date_index:
         # 如果有日期索引，继续延伸日期
@@ -631,9 +662,9 @@ def forecast_arima(model, train_data, steps=10):
         # 创建包含预测结果的DataFrame
         forecast_df = pd.DataFrame({
             '历史数据': pd.Series(train_data.values, index=date_index),
-            '预测值': pd.Series(forecast.predicted_mean.values, index=forecast_dates),
-            '95%置信区间下限': pd.Series(forecast.conf_int().iloc[:, 0].values, index=forecast_dates),
-            '95%置信区间上限': pd.Series(forecast.conf_int().iloc[:, 1].values, index=forecast_dates)
+            '预测值': pd.Series(forecast_mean.values if hasattr(forecast_mean, 'values') else forecast_mean, index=forecast_dates),
+            '95%置信区间下限': pd.Series(lower_ci.values if hasattr(lower_ci, 'values') else lower_ci, index=forecast_dates),
+            '95%置信区间上限': pd.Series(upper_ci.values if hasattr(upper_ci, 'values') else upper_ci, index=forecast_dates)
         })
     else:
         # 如果没有日期索引，使用数字索引
@@ -643,16 +674,16 @@ def forecast_arima(model, train_data, steps=10):
         # 创建包含预测结果的DataFrame
         forecast_df = pd.DataFrame({
             '历史数据': pd.Series(train_data, index=train_index),
-            '预测值': pd.Series(forecast.predicted_mean.values, index=forecast_index),
-            '95%置信区间下限': pd.Series(forecast.conf_int().iloc[:, 0].values, index=forecast_index),
-            '95%置信区间上限': pd.Series(forecast.conf_int().iloc[:, 1].values, index=forecast_index)
+            '预测值': pd.Series(forecast_mean.values if hasattr(forecast_mean, 'values') else forecast_mean, index=forecast_index),
+            '95%置信区间下限': pd.Series(lower_ci.values if hasattr(lower_ci, 'values') else lower_ci, index=forecast_index),
+            '95%置信区间上限': pd.Series(upper_ci.values if hasattr(upper_ci, 'values') else upper_ci, index=forecast_index)
         })
     
     # 返回预测结果
     forecast_results = {
-        'forecast_mean': forecast.predicted_mean,
-        'lower_ci': forecast.conf_int().iloc[:, 0],
-        'upper_ci': forecast.conf_int().iloc[:, 1]
+        'forecast_mean': forecast_mean,
+        'lower_ci': lower_ci,
+        'upper_ci': upper_ci
     }
     
     return forecast_results, forecast_df
@@ -696,18 +727,30 @@ def evaluate_arima_model(test_data, forecast_values, train_data=None):
     # 避免除以零
     mape = np.mean(np.abs((test_data - forecast_values) / np.where(test_data != 0, test_data, 1))) * 100
     
-    # 创建评估指标字典
+    # 方向准确率 - 预测的涨跌方向与实际相符的比例
+    if len(test_data) > 1:
+        actual_direction = np.sign(test_data[1:] - test_data[:-1])
+        pred_direction = np.sign(forecast_values[1:] - forecast_values[:-1])
+        direction_match = actual_direction == pred_direction
+        direction_accuracy = np.mean(direction_match)
+    else:
+        direction_accuracy = None
+    
+    # 创建评估指标字典，确保所有NaN值转换为None
     metrics = {
-        'MSE': mse,
-        'RMSE': rmse,
-        'MAE': mae,
-        'MAPE': mape
+        'MSE': None if np.isnan(mse) else float(mse),
+        'RMSE': None if np.isnan(rmse) else float(rmse),
+        'MAE': None if np.isnan(mae) else float(mae),
+        'MAPE': None if np.isnan(mape) else float(mape),
+        'Direction_Accuracy': None if direction_accuracy is None or np.isnan(direction_accuracy) else float(direction_accuracy)
     }
     
     # 如果提供了训练数据和拟合模型，添加AIC和BIC
     if train_data is not None and hasattr(train_data, 'model'):
-        metrics['AIC'] = train_data.model.aic
-        metrics['BIC'] = train_data.model.bic
+        aic = getattr(train_data.model, 'aic', None)
+        bic = getattr(train_data.model, 'bic', None)
+        metrics['AIC'] = None if aic is None or np.isnan(aic) else float(aic)
+        metrics['BIC'] = None if bic is None or np.isnan(bic) else float(bic)
     
     return metrics
 
@@ -816,83 +859,56 @@ def inverse_diff(original_data, diff_df, d=1, log_diff=False):
 # 创建时间序列折线图的echarts选项
 def create_timeseries_chart(df, title='时间序列图', series_names=None):
     """
-    创建时间序列图的echarts选项
+    创建时间序列图表配置
     
     参数:
-    df: DataFrame，包含要绘制的时间序列数据
+    df: 包含时间序列数据的DataFrame
     title: 图表标题
-    series_names: 系列名称列表，如果为None则使用df的列名
+    series_names: 系列名称列表（默认为None，使用DataFrame列名）
     
     返回:
-    dict: echarts图表选项
+    dict: ECharts图表配置选项
     """
-    # 确保数据按日期排序（从旧到新）
+    # 确保DataFrame被排序
     if isinstance(df.index, pd.DatetimeIndex):
         df = df.sort_index()
-    elif 'Date' in df.columns:
-        df = df.sort_values(by='Date')
     
-    # 准备X轴数据
+    # 获取x轴数据
     if isinstance(df.index, pd.DatetimeIndex):
-        # 使用日期索引
-        dates = df.index.strftime('%Y-%m-%d').tolist()
-        x_data = dates
-    elif 'Date' in df.columns:
-        # 使用Date列
-        if pd.api.types.is_datetime64_any_dtype(df['Date']):
-            dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
-        else:
-            # 如果Date不是日期类型，尝试转换
-            try:
-                dates = pd.to_datetime(df['Date']).dt.strftime('%Y-%m-%d').tolist()
-            except:
-                dates = df['Date'].astype(str).tolist()
-        x_data = dates
+        # 如果是时间索引，转换为格式化的字符串
+        x_data = df.index.strftime('%Y-%m-%d').tolist()
     else:
-        # 如果没有日期列，使用数字索引
-        x_data = list(range(len(df)))
+        # 如果是普通索引，直接使用
+        x_data = [str(x) for x in df.index.tolist()]
     
     # 准备系列数据
-    series_list = []
+    series = []
+    if series_names is None:
+        # 如果未提供系列名称，使用DataFrame列名
+        series_names = df.columns.tolist()
     
-    # 如果df是DataFrame，绘制每一列
-    if isinstance(df, pd.DataFrame):
-        # 确定要绘制的列
-        if 'Date' in df.columns:
-            columns = [col for col in df.columns if col != 'Date']
+    # 遍历每个系列
+    for i, column in enumerate(df.columns):
+        if i < len(series_names):
+            name = series_names[i]
         else:
-            columns = df.columns
+            name = column
         
-        # 使用指定的系列名称（如果提供）
-        if series_names is not None:
-            if len(series_names) != len(columns):
-                # 如果提供的名称数量与列数不匹配，使用默认名称
-                series_names = columns
-        else:
-            series_names = columns
+        # 将NaN值转换为null以便JSON序列化
+        data = df[column].tolist()
+        data = [None if (pd.isna(x) or np.isnan(x) if isinstance(x, (float, int)) else False) else x for x in data]
         
-        # 为每个列创建一个系列
-        for i, column in enumerate(columns):
-            if pd.api.types.is_numeric_dtype(df[column]):
-                series_list.append({
-                    'name': series_names[i],
-                    'type': 'line',
-                    'data': df[column].round(3).tolist(),
-                    'smooth': True,
-                    'showSymbol': False
-                })
-    else:
-        # 如果df是Series，只绘制一个系列
-        series_name = df.name if df.name else '数据'
-        series_list.append({
-            'name': series_name,
+        # 添加系列配置
+        series.append({
+            'name': name,
             'type': 'line',
-            'data': df.round(3).tolist(),
             'smooth': True,
-            'showSymbol': False
+            'data': data,
+            'showSymbol': False,
+            'connectNulls': True
         })
     
-    # 创建echarts选项
+    # 构建完整的图表选项
     option = {
         'title': {
             'text': title,
@@ -907,23 +923,26 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
         'grid': {
             'left': '3%',
             'right': '4%',
-            'bottom': '12%',
+            'bottom': '3%',
             'containLabel': True
+        },
+        'toolbox': {
+            'feature': {
+                'saveAsImage': {}
+            }
         },
         'xAxis': {
             'type': 'category',
-            'data': x_data,
             'boundaryGap': False,
-            'axisLabel': {
-                'rotate': 45,
-                'interval': 'auto'
-            }
+            'data': x_data
         },
         'yAxis': {
-            "scale": True,           # 主图Y轴
-            'type': 'value'
+            'type': 'value',
+            'scale': True,
+            'splitLine': {
+                'show': True
+            }
         },
-        'series': series_list,
         'dataZoom': [
             {
                 'type': 'inside',
@@ -931,22 +950,11 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
                 'end': 100
             },
             {
-                'type': 'slider',
                 'start': 0,
                 'end': 100
             }
         ],
-        'toolbox': {
-            'show': True,
-            'feature': {
-                'saveAsImage': {
-                    'show': True,
-                    'title': '保存为图片',
-                    'type': 'png'
-                }
-            },
-            'right': '2%'
-        }
+        'series': series
     }
     
     return option
@@ -954,65 +962,88 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
 # 创建ECharts分布直方图函数，带有正态拟合线
 def create_histogram_chart(series, title='分布直方图', bins=30):
     """
-    创建直方图的echarts选项
+    创建直方图ECharts配置
     
     参数:
-    series: Series，要绘制直方图的数据
+    series: 数据序列
     title: 图表标题
-    bins: 直方图的分箱数
+    bins: 直方图的箱数
     
     返回:
-    dict: echarts图表选项
+    dict: ECharts图表配置选项
     """
-    # 确保数据是数值类型
-    if not pd.api.types.is_numeric_dtype(series):
-        # 如果是日期时间类型，转换为时间戳
-        if pd.api.types.is_datetime64_any_dtype(series):
-            series = (series - pd.Timestamp("1970-01-01")) // pd.Timedelta("1s")
-        else:
-            raise TypeError(f"无法处理类型为 {series.dtype} 的数据，需要数值类型数据")
+    # 处理NaN值
+    if isinstance(series, pd.Series):
+        series = series.dropna()
+    else:
+        series = np.array(series)
+        series = series[~np.isnan(series)]
     
-    # 移除缺失值
-    series = series.dropna()
+    if len(series) == 0:
+        # 如果数据为空，返回空图表
+        return {
+            'title': {
+                'text': f'{title} - 无有效数据',
+                'left': 'center'
+            },
+            'xAxis': {'type': 'value'},
+            'yAxis': {'type': 'value'},
+            'series': []
+        }
     
-    # 计算直方图
+    # 计算直方图数据
     hist, bin_edges = np.histogram(series, bins=bins)
     
     # 准备x轴标签（使用分箱中点）
     bin_centers = [(bin_edges[i] + bin_edges[i+1])/2 for i in range(len(bin_edges)-1)]
+    # 重新添加bin_labels生成代码
     bin_labels = [f'{bin_edges[i]:.2f}-{bin_edges[i+1]:.2f}' for i in range(len(bin_edges)-1)]
     
     # 计算正态分布拟合曲线
     # 获取数据的均值和标准差
-    mu = series.mean()
-    sigma = series.std()
+    mu = float(np.mean(series))
+    sigma = float(np.std(series))
     
     # 计算理论正态分布的Y值
     # 首先计算每个箱子中心的概率密度函数值
-    pdf_values = stats.norm.pdf(bin_centers, mu, sigma)
+    try:
+        from scipy import stats
+        pdf_values = stats.norm.pdf(bin_centers, mu, sigma)
+        
+        # 将PDF值转换为与直方图对应的频数
+        # 需要乘以数据总数和箱宽度来与直方图高度匹配
+        bin_width = bin_edges[1] - bin_edges[0]
+        pdf_heights = pdf_values * len(series) * bin_width
+        
+        # 确保没有NaN值
+        pdf_heights = np.nan_to_num(pdf_heights, nan=0.0)
+        
+        # 创建正态分布数据
+        normal_curve_data = []
+        for i in range(len(bin_centers)):
+            # 使用索引和值，适配分类轴
+            normal_curve_data.append([i, float(pdf_heights[i])])
+    except (ImportError, Exception) as e:
+        # 如果scipy不可用或出错，不使用正态拟合线
+        normal_curve_data = []
     
-    # 将PDF值转换为与直方图对应的频数
-    # 需要乘以数据总数和箱宽度来与直方图高度匹配
-    bin_width = bin_edges[1] - bin_edges[0]
-    pdf_heights = pdf_values * len(series) * bin_width
-    
-    # 创建echarts选项
+    # 创建ECharts选项
     option = {
         'title': {
             'text': title,
             'left': 'center'
         },
         'tooltip': {
-            "position": "bottom",
             'trigger': 'axis',
             'axisPointer': {
                 'type': 'shadow'
-            }
+            },
+            'formatter': '{c0} 个观测值'
         },
         'grid': {
             'left': '3%',
             'right': '4%',
-            'bottom': '8%',
+            'bottom': '8%',  # 增加底部空间以容纳旋转标签
             'containLabel': True
         },
         'xAxis': {
@@ -1028,29 +1059,37 @@ def create_histogram_chart(series, title='分布直方图', bins=30):
         },
         'yAxis': {
             'type': 'value',
-            'name': '频数'
+            'name': '频数',
+            'nameLocation': 'middle',
+            'nameGap': 40
         },
         'series': [
             {
                 'name': '频数',
                 'type': 'bar',
-                'data': hist.tolist(),
+                'data': hist.tolist(),  # 使用直接的hist值
                 'barWidth': '90%'
-            },
-            {
-                'name': '正态分布拟合',
-                'type': 'line',
-                'smooth': True,
-                'data': list(zip(range(len(bin_centers)), pdf_heights.tolist())),
-                'showSymbol': False,
-                'lineStyle': {
-                    'color': '#FF0000',
-                    'width': 2
-                },
-                'z': 10
             }
         ]
     }
+    
+    # 如果有正态分布拟合线，添加到series中
+    if normal_curve_data:
+        option['series'].append({
+            'name': '正态分布拟合',
+            'type': 'line',
+            'smooth': True,
+            'data': normal_curve_data,
+            'showSymbol': False,
+            'lineStyle': {
+                'color': '#FF0000',
+                'width': 2
+            },
+            'z': 10
+        })
+        
+        # 在tooltip中添加均值和标准差信息
+        option['tooltip']['formatter'] = '{a0}: {c0} 个观测值<br/>均值: ' + str(round(mu, 4)) + '<br/>标准差: ' + str(round(sigma, 4))
     
     return option
 

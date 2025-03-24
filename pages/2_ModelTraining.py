@@ -90,6 +90,15 @@ st.set_page_config(
 # 导入PyTorch
 import torch
 
+# 初始化ARIMA相关的session state变量
+if 'arima_model_metrics' not in st.session_state:
+    st.session_state['arima_model_metrics'] = None
+if 'arima_training_complete' not in st.session_state:
+    st.session_state['arima_training_complete'] = False
+if 'arima_model' not in st.session_state:
+    st.session_state['arima_model'] = None
+if 'arima_model_params' not in st.session_state:
+    st.session_state['arima_model_params'] = None
 
 # 标题和简介
 st.title("模型训练")
@@ -158,9 +167,18 @@ with st.sidebar:
     # 模型状态信息
     with st.expander("训练状态", expanded=True):
         if 'training_complete' in st.session_state and st.session_state['training_complete']:
-            st.success("模型训练已完成")
+            # 根据不同的模型类型显示不同的训练完成信息
+            if 'arima_training_complete' in st.session_state and st.session_state['arima_training_complete']:
+                if 'lstm_training_complete' in st.session_state and st.session_state['lstm_training_complete']:
+                    st.success("LSTM和ARIMA模型均已训练完成")
+                else:
+                    st.success("ARIMA模型已训练完成")
+            else:
+                st.success("LSTM模型已训练完成")
         elif 'start_training' in st.session_state and st.session_state['start_training']:
-            st.info("模型训练中...")
+            st.info("LSTM模型训练中...")
+        elif 'arima_start_training' in st.session_state and st.session_state['arima_start_training']:
+            st.info("ARIMA模型训练中...")
         else:
             st.info("等待开始训练...")
     
@@ -388,7 +406,8 @@ with model_tabs[0]:
                             st_echarts(
                                 options=correlation_heatmap_option,
                                 height="300px",
-                                width="100%"
+                                width="100%",
+                                key="corr_heatmap"
                             )
                         except Exception as e:
                             st.error(f"热力图渲染出错: {str(e)}")
@@ -470,7 +489,8 @@ with model_tabs[0]:
                         st_echarts(
                             options=p_value_option, 
                             height="200px",
-                            width="100%"
+                            width="100%",
+                            key="p_value_chart"
                         )
                 else:
                     st.warning("没有足够的特征进行统计显著性分析")
@@ -550,14 +570,21 @@ with model_tabs[0]:
     
     # 如果会话中已有训练历史但界面刚刚加载，显示之前的训练历史
     if 'training_history' in st.session_state and 'training_complete' in st.session_state and st.session_state['training_complete'] and not ('start_training' in st.session_state and st.session_state['start_training']):
-        history = st.session_state['training_history']
-        with loss_chart_placeholder:
-            # 绘制已有的损失曲线
-            history_df = pd.DataFrame({
-                '训练损失': history['train_loss'],
-                '验证损失': history['val_loss']
-            })
-            st.line_chart(history_df)
+        # 检查是哪种模型完成了训练
+        if 'arima_training_complete' in st.session_state and st.session_state['arima_training_complete']:
+            # ARIMA模型训练完成后没有train_loss和val_loss，不再显示loss_chart
+            pass
+        else:
+            # LSTM模型才有train_loss和val_loss
+            history = st.session_state['training_history']
+            with loss_chart_placeholder:
+                # 绘制已有的损失曲线
+                if 'train_loss' in history and 'val_loss' in history:
+                    history_df = pd.DataFrame({
+                        '训练损失': history['train_loss'],
+                        '验证损失': history['val_loss']
+                    })
+                    st.line_chart(history_df)
     
     if 'start_training' in st.session_state and st.session_state['start_training']:
         with progress_placeholder.container():
@@ -875,7 +902,7 @@ with model_tabs[1]:
                         time_series_df,
                         title=f"{selected_var} - {transform_title}"
                     )
-                    st_echarts(options=timeseries_option, height="400px")
+                    st_echarts(options=timeseries_option, height="400px", key=f"timeseries_{selected_var}_{transform_method}")
                 except Exception as e:
                     st.error(f"无法绘制时间序列图: {str(e)}")
                 
@@ -885,7 +912,7 @@ with model_tabs[1]:
                         processed_data,
                         title=f"{selected_var} - 分布直方图"
                     )
-                    st_echarts(options=histogram_option, height="400px")
+                    st_echarts(options=histogram_option, height="400px", key=f"histogram_{selected_var}_{transform_method}")
                 except Exception as e:
                     st.error(f"无法绘制分布直方图: {str(e)}")
                 
@@ -895,7 +922,7 @@ with model_tabs[1]:
                         processed_data,
                         title=f"{selected_var} - QQ图"
                     )
-                    st_echarts(options=qq_option, height="450px")
+                    st_echarts(options=qq_option, height="450px", key=f"qqplot_{selected_var}_{transform_method}")
                 except Exception as e:
                     st.warning(f"无法绘制QQ图: {str(e)}")
                 
@@ -912,10 +939,10 @@ with model_tabs[1]:
                     acf_col, pacf_col = st.columns(2)
                     
                     with acf_col:
-                        st_echarts(options=acf_option, height="200px")
+                        st_echarts(options=acf_option, height="200px", key=f"acf_{selected_var}_{transform_method}")
                     
                     with pacf_col:
-                        st_echarts(options=pacf_option, height="200px")
+                        st_echarts(options=pacf_option, height="200px", key=f"pacf_{selected_var}_{transform_method}")
                         
                 except Exception as e:
                     st.warning(f"无法绘制自相关和偏自相关图: {str(e)}")
@@ -1108,7 +1135,51 @@ with model_tabs[1]:
             value=default_q
         )
 
+    # 在ARIMA标签页中添加一个训练按钮
+    arima_train_btn_col, arima_result_col = st.columns([1, 3])
+    
+    # 添加预先创建的占位符用于训练过程中显示
+    arima_progress_placeholder = st.empty()
+    arima_chart_placeholder = st.empty()
+    
+    with arima_train_btn_col:
+        arima_train_button = st.button(
+            "训练ARIMA模型",
+            help="使用当前参数训练ARIMA模型",
+            use_container_width=True,
+            key="arima_train_button"
+        )
 
+    # 检查是否点击了训练按钮
+    if arima_train_button:
+        # 保存当前参数到session_state以便在页面刷新后保持
+        st.session_state['arima_p_param'] = p_param
+        st.session_state['arima_d_param'] = d_param
+        st.session_state['arima_q_param'] = q_param
+        st.session_state['arima_train_test_ratio'] = train_test_ratio
+        # 设置ARIMA开始训练标志
+        st.session_state['arima_start_training'] = True
+        # 重置训练完成状态
+        st.session_state['arima_training_complete'] = False
+        st.session_state['training_complete'] = False
+        st.rerun()  # 重新加载页面以开始训练流程
+    
+    # 如果训练已完成，显示结果
+    if 'arima_training_complete' in st.session_state and st.session_state['arima_training_complete']:
+        # 显示预测图表
+        if 'arima_prediction_chart' in st.session_state:
+            st.subheader("ARIMA模型预测结果")
+            st_echarts(options=st.session_state['arima_prediction_chart'], height="500px", key="arima_pred_chart_result")
+        
+        # 显示残差图
+        if 'arima_residuals_chart' in st.session_state:
+            st.subheader("模型残差")
+            st_echarts(options=st.session_state['arima_residuals_chart'], height="300px", key="arima_residuals_chart_result")
+        
+        # 显示残差分布图
+        if 'arima_residuals_hist' in st.session_state:
+            st.subheader("残差分布")
+            st_echarts(options=st.session_state['arima_residuals_hist'], height="300px", key="arima_residuals_hist_result")
 
 # Prophet参数设置
 with model_tabs[2]:
@@ -1268,8 +1339,249 @@ if 'start_training' in st.session_state and st.session_state['start_training']:
     
     # 更新训练状态
     st.session_state['training_complete'] = True
+    st.session_state['lstm_training_complete'] = True
     
     # 显示训练完成消息
-    st.success("模型训练已完成！")
+    st.success("LSTM模型训练已完成！")
     # 重新加载页面以更新左侧栏状态
     st.rerun()
+
+# ARIMA执行训练的逻辑
+if 'arima_start_training' in st.session_state and st.session_state['arima_start_training']:
+    # 获取处理后的数据
+    if 'arima_processed_data' not in st.session_state or st.session_state['arima_processed_data'] is None:
+        st.error("请先在ARIMA标签页选择数据和处理方法")
+        st.stop()
+    
+    # 获取训练参数（从session_state中获取，确保页面刷新后仍能使用相同参数）
+    p_param = st.session_state.get('arima_p_param', p_param)
+    d_param = st.session_state.get('arima_d_param', d_param)
+    q_param = st.session_state.get('arima_q_param', q_param)
+    train_test_ratio = st.session_state.get('arima_train_test_ratio', train_test_ratio)
+    
+    processed_data = st.session_state['arima_processed_data']
+    
+    # 使用预先创建的占位符显示训练状态
+    with arima_progress_placeholder.container():
+        st.info("训练ARIMA模型中...")
+        arima_progress_bar = st.progress(0)
+        arima_status_text = st.empty()
+        arima_status_text.info(f"正在拟合ARIMA({p_param},{d_param},{q_param})模型...")
+    
+    # 1. 拆分训练集和测试集
+    train_size = int(len(processed_data) * train_test_ratio)
+    train_data = processed_data[:train_size]
+    test_data = processed_data[train_size:]
+    
+    # 更新进度条
+    arima_progress_bar.progress(0.2)
+    arima_status_text.info(f"数据集已划分: 训练集大小 {len(train_data)}, 测试集大小 {len(test_data)}")
+    
+    # 2. 训练ARIMA模型
+    try:
+        with st.spinner("正在训练ARIMA模型..."):
+            start_time = time.time()
+            # 配置模型阶数
+            order = (p_param, d_param, q_param)
+            arima_model, model_summary = fit_arima_model(train_data, order)
+            training_time = time.time() - start_time
+            
+            # 更新进度条
+            arima_progress_bar.progress(0.5)
+            arima_status_text.info(f"模型训练完成! 用时: {training_time:.2f}秒")
+            
+            # 检查模型是否成功训练
+            if arima_model is None:
+                st.error("ARIMA模型训练失败")
+                st.session_state['arima_start_training'] = False
+                st.stop()
+                
+            # 3. 获取训练集拟合值
+            train_pred = arima_model.fittedvalues
+            
+            # 更新进度条
+            arima_progress_bar.progress(0.7)
+            arima_status_text.info("获取训练集拟合值和测试集预测中...")
+            
+            # 4. 对测试集进行预测
+            forecast_results, _ = forecast_arima(arima_model, train_data, steps=len(test_data))
+            if forecast_results is None:
+                st.error("预测失败，无法获取预测结果")
+                test_pred = np.zeros(len(test_data))  # 使用零填充
+            else:
+                test_pred = forecast_results['forecast_mean']
+
+            # 确保预测结果有效
+            if test_pred is None:
+                st.error("测试集预测失败")
+                test_pred = np.zeros(len(test_data))  # 使用零填充
+            elif isinstance(test_pred, pd.Series) or isinstance(test_pred, np.ndarray):
+                # 处理预测结果中的NaN值
+                if isinstance(test_pred, pd.Series):
+                    test_pred = test_pred.fillna(0).values  # 用0填充NaN
+                else:
+                    # 如果是numpy数组
+                    test_pred = np.nan_to_num(test_pred, nan=0.0)  # 用0填充NaN
+            
+            # 5. 评估模型性能
+            # 训练集评估
+            train_mse = np.mean((train_pred - train_data) ** 2)
+            train_rmse = np.sqrt(train_mse)
+            train_mae = np.mean(np.abs(train_pred - train_data))
+            
+            # 计算方向准确率（1阶差分方向是否一致）
+            true_direction = np.sign(np.diff(train_data))
+            pred_direction = np.sign(np.diff(train_pred))
+            # 跳过nan值
+            valid_indices = ~np.isnan(true_direction) & ~np.isnan(pred_direction)
+            train_direction_accuracy = np.mean(true_direction[valid_indices] == pred_direction[valid_indices]) if np.any(valid_indices) else 0
+            
+            # 测试集评估
+            test_mse = np.mean((test_pred - test_data) ** 2)
+            test_rmse = np.sqrt(test_mse)
+            test_mae = np.mean(np.abs(test_pred - test_data))
+            
+            # 计算测试集的方向准确率
+            true_direction_test = np.sign(np.diff(test_data))
+            pred_direction_test = np.sign(np.diff(test_pred))
+            valid_indices_test = ~np.isnan(true_direction_test) & ~np.isnan(pred_direction_test)
+            test_direction_accuracy = np.mean(true_direction_test[valid_indices_test] == pred_direction_test[valid_indices_test]) if np.any(valid_indices_test) else 0
+            
+            # 更新进度条
+            arima_progress_bar.progress(0.9)
+            arima_status_text.info("创建可视化图表中...")
+            
+            # 6. 构建结果DataFrame
+            # 使用numpy的掩码操作处理NaN值，确保数据可被序列化
+            train_pred_safe = np.array(train_pred, dtype=float)
+            # 处理潜在的NaN值
+            train_pred_safe = np.nan_to_num(train_pred_safe, nan=0.0)
+            test_pred_safe = np.nan_to_num(test_pred, nan=0.0)
+
+            # 创建DataFrame，确保全部使用浮点数（可以表示NaN）并预先处理
+            results_df = pd.DataFrame({
+                '实际值': np.nan_to_num(np.concatenate([train_data, test_data]), nan=0.0),
+                '训练集拟合值': np.concatenate([train_pred_safe, np.zeros(len(test_data))]),
+                '测试集预测值': np.concatenate([np.zeros(len(train_data)), test_pred_safe])
+            })
+
+            # 确保DataFrame中没有无效值
+            results_df = results_df.fillna(0)
+
+            # 7. 创建ECharts图表
+            prediction_chart_option = create_timeseries_chart(
+                results_df,
+                title='ARIMA预测结果对比',
+                series_names=['实际值', '训练集拟合值', '测试集预测值']
+            )
+            
+            # 使用预先创建的占位符显示图表
+            with arima_chart_placeholder:
+                # 获取残差并处理
+                residuals = arima_model.resid
+                # 处理残差中的NaN值
+                residuals = np.nan_to_num(residuals, nan=0.0)
+                residuals_df = pd.DataFrame({'残差': residuals})
+                # 确保DataFrame中没有无效值
+                residuals_df = residuals_df.fillna(0)
+
+                # 生成残差图表配置
+                residuals_chart_option = create_timeseries_chart(
+                    residuals_df,
+                    title='ARIMA模型残差'
+                )
+                
+                # 生成残差分布图配置
+                residuals_hist_option = create_histogram_chart(
+                    residuals,
+                    title='残差分布直方图'
+                )
+                
+                # 显示所有图表
+                # 预测结果图表
+                st.subheader("ARIMA模型预测结果")
+                st_echarts(options=prediction_chart_option, height="500px", key="arima_pred_chart_training")
+                
+                # 残差图
+                st.subheader("模型残差")
+                st_echarts(options=residuals_chart_option, height="300px", key="arima_residuals_chart_training")
+                
+                # 残差分布图
+                st.subheader("残差分布")
+                st_echarts(options=residuals_hist_option, height="300px", key="arima_residuals_hist_training")
+                
+                # 完成进度条
+                arima_progress_bar.progress(1.0)
+                arima_status_text.success("ARIMA模型训练与评估完成!")
+            
+            # 8. 保存模型和结果到session state
+            # 将结果封装成一个统一的字典（类似LSTM的做法）
+            arima_training_result = {
+                'model': arima_model,
+                'order': order,
+                'train_data': train_data,
+                'test_data': test_data,
+                'train_pred': train_pred,
+                'test_pred': test_pred,
+                'metrics': {
+                    'train': {
+                        'MSE': float(train_mse),
+                        'RMSE': float(train_rmse),
+                        'MAE': float(train_mae),
+                        'Direction_Accuracy': float(train_direction_accuracy)
+                    },
+                    'test': {
+                        'MSE': float(test_mse),
+                        'RMSE': float(test_rmse),
+                        'MAE': float(test_mae),
+                        'Direction_Accuracy': float(test_direction_accuracy)
+                    }
+                },
+                'model_info': {
+                    'AIC': arima_model.aic,
+                    'BIC': arima_model.bic,
+                    'training_time': training_time,
+                    'timestamp': datetime.now().strftime("%Y%m%d_%H%M%S")
+                },
+                'charts': {
+                    'prediction': prediction_chart_option,
+                    'residuals': residuals_chart_option,
+                    'residuals_hist': residuals_hist_option
+                }
+            }
+            
+            # 保存完整训练结果到session_state
+            st.session_state['arima_training_result'] = arima_training_result
+            
+            # 同时也保存个别组件以方便访问
+            st.session_state['arima_model'] = arima_model
+            st.session_state['arima_model_metrics'] = arima_training_result['metrics']['test']
+            st.session_state['model_metrics'] = arima_training_result['metrics']['test']  # 用于侧边栏显示
+            
+            # 保存图表配置用于页面刷新后显示
+            st.session_state['arima_prediction_chart'] = prediction_chart_option
+            st.session_state['arima_residuals_chart'] = residuals_chart_option
+            st.session_state['arima_residuals_hist'] = residuals_hist_option
+            
+            # 更新训练状态
+            st.session_state['arima_training_complete'] = True
+            st.session_state['training_complete'] = True  # 用于侧边栏显示
+            
+            # 显示训练完成消息
+            st.success("ARIMA模型训练已完成！")
+            
+            # 重置训练开始状态并刷新页面
+            st.session_state['arima_start_training'] = False
+            
+            # 重新加载页面以更新侧边栏状态
+            st.rerun()
+            
+    except Exception as e:
+        import traceback
+        st.error(f"ARIMA模型训练过程中出错: {str(e)}")
+        st.code(traceback.format_exc())
+        # 重置训练开始状态
+        st.session_state['arima_start_training'] = False
+
+
+
