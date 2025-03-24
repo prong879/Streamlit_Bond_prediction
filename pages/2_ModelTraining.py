@@ -996,30 +996,112 @@ with model_tabs[1]:
     # 然后是原来的ARIMA参数设置部分
     st.markdown("### ARIMA模型参数")
     
+    # 添加最优参数检测控件
+    st.markdown("#### 自动参数优化")
+    
+    # 创建第一行控件：信息准则和最大阶数设置
+    criterion_col, max_p_col, max_d_col, max_q_col = st.columns(4)
+    
+    with criterion_col:
+        criterion = st.selectbox(
+            "信息准则",
+            options=["aic", "bic"],
+            index=1,
+            help="AIC（赤池信息准则）或BIC（贝叶斯信息准则）"
+        )
+    
+    with max_p_col:
+        max_p = st.number_input(
+            "最大AR阶数",
+            min_value=0,
+            max_value=10,
+            value=3,
+            help="搜索范围：0 到设定值"
+        )
+    
+    with max_d_col:
+        max_d = st.number_input(
+            "最大差分阶数",
+            min_value=0,
+            max_value=2,
+            value=2,
+            help="搜索范围：0 到设定值"
+        )
+    
+    with max_q_col:
+        max_q = st.number_input(
+            "最大MA阶数",
+            min_value=0,
+            max_value=10,
+            value=3,
+            help="搜索范围：0 到设定值"
+        )
+    
+    # 创建第二行：优化按钮和结果显示
+    opt_btn_col, opt_result_col = st.columns([1, 3])
+    
+    with opt_btn_col:
+        optimize_button = st.button(
+            "自动检测最优参数",
+            help="遍历可能的参数组合找到最优ARIMA参数",
+            use_container_width=True
+        )
+    
+    with opt_result_col:
+        if optimize_button:
+            try:
+                with st.spinner("正在搜索最优参数..."):
+                    # 获取当前处理后的数据
+                    if 'arima_processed_data' in st.session_state:
+                        processed_data = st.session_state['arima_processed_data']
+                        # 调用find_best_arima_params函数
+                        best_params = find_best_arima_params(
+                            processed_data,
+                            p_range=range(0, max_p + 1),
+                            d_range=range(0, max_d + 1),
+                            q_range=range(0, max_q + 1),
+                            criterion=criterion
+                        )
+                        
+                        # 更新session state中的最优参数
+                        st.session_state['best_arima_params'] = best_params
+                        
+                        # 显示成功信息
+                        st.success(f"找到最优参数：p={best_params[0]}, d={best_params[1]}, q={best_params[2]}")
+                    else:
+                        st.error("请先选择数据和处理方法")
+            except Exception as e:
+                st.error(f"参数优化失败：{str(e)}")
+    
+    st.markdown("#### 模型参数设置")
     # 添加一个按钮，用于显示ARIMA模型参数的说明
     arima_params_ar_col, arima_params_d_col, arima_params_ma_col = st.columns([1,1,1])
     with arima_params_ar_col:
+        # 如果有最优参数，使用它作为默认值
+        default_p = st.session_state.get('best_arima_params', (2, 1, 2))[0] if 'best_arima_params' in st.session_state else 2
         p_param = st.number_input(
             "p (AR阶数)",
             min_value=0,
             max_value=10,
-            value=2
+            value=default_p
         )
     
     with arima_params_d_col:
+        default_d = st.session_state.get('best_arima_params', (2, 1, 2))[1] if 'best_arima_params' in st.session_state else 1
         d_param = st.number_input(
             "d (差分阶数)",
             min_value=0,
             max_value=2,
-            value=1
+            value=default_d
         )
     
     with arima_params_ma_col:
+        default_q = st.session_state.get('best_arima_params', (2, 1, 2))[2] if 'best_arima_params' in st.session_state else 2
         q_param = st.number_input(
             "q (MA阶数)",
             min_value=0,
             max_value=10,
-            value=2
+            value=default_q
         )
 
 

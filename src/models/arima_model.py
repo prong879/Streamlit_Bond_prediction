@@ -27,6 +27,7 @@ from scipy import stats
 import io
 import base64
 from statsmodels.stats.stattools import durbin_watson
+import warnings
 
 # 生成描述性统计表
 def generate_descriptive_statistics(series):
@@ -305,6 +306,15 @@ def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2),
     返回:
     best_params: 最佳参数组合 (p,d,q) 或 (p,d,q,P,D,Q,s)
     """
+    # 确保数据是一维数组
+    if isinstance(timeseries, pd.DataFrame):
+        timeseries = timeseries.values.flatten()
+    elif isinstance(timeseries, pd.Series):
+        timeseries = timeseries.values
+    
+    # 移除缺失值
+    timeseries = pd.Series(timeseries).dropna().values
+    
     results = []
     seasonal = P_range is not None and D_range is not None and Q_range is not None and s is not None
     
@@ -327,24 +337,28 @@ def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2),
                                         timeseries, 
                                         order=(p, d, q), 
                                         seasonal_order=(P, D, Q, s),
-                                        enforce_stationarity=False,
-                                        enforce_invertibility=False
+                                        enforce_stationarity=True,  # 强制平稳性
+                                        enforce_invertibility=True,  # 强制可逆性
+                                        initialization='approximate_diffuse'  # 使用近似扩散初始化
                                     )
-                                    model_fit = model.fit(disp=False)
+                                    with warnings.catch_warnings():
+                                        warnings.filterwarnings("ignore")
+                                        model_fit = model.fit(disp=False, maxiter=500)  # 增加最大迭代次数
                                     
                                     # 记录AIC/BIC值
                                     results.append({
                                         'order': (p, d, q, P, D, Q, s),
                                         'AIC': model_fit.aic,
                                         'BIC': model_fit.bic,
-                                        'success': True
+                                        'success': True,
+                                        'converged': model_fit.mle_retvals.get('converged', False)
                                     })
                                     
                                 except Exception as e:
                                     results.append({
                                         'order': (p, d, q, P, D, Q, s),
-                                        'AIC': np.nan,
-                                        'BIC': np.nan,
+                                        'AIC': np.inf,
+                                        'BIC': np.inf,
                                         'success': False,
                                         'error': str(e)
                                     })
@@ -359,22 +373,30 @@ def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2),
                     
                     try:
                         # 创建并拟合ARIMA模型
-                        model = ARIMA(timeseries, order=(p, d, q))
-                        model_fit = model.fit()
+                        model = ARIMA(
+                            timeseries, 
+                            order=(p, d, q),
+                            enforce_stationarity=True,  # 强制平稳性
+                            enforce_invertibility=True  # 强制可逆性
+                        )
+                        with warnings.catch_warnings():
+                            warnings.filterwarnings("ignore")
+                            model_fit = model.fit()
                         
                         # 记录AIC和BIC值
                         results.append({
                             'order': (p, d, q),
                             'AIC': model_fit.aic,
                             'BIC': model_fit.bic,
-                            'success': True
+                            'success': True,
+                            'converged': True
                         })
                         
                     except Exception as e:
                         results.append({
                             'order': (p, d, q),
-                            'AIC': np.nan,
-                            'BIC': np.nan,
+                            'AIC': np.inf,
+                            'BIC': np.inf,
                             'success': False,
                             'error': str(e)
                         })
@@ -382,16 +404,25 @@ def find_best_arima_params(timeseries, p_range=range(0, 3), d_range=range(0, 2),
     # 转换为DataFrame并排序
     results_df = pd.DataFrame(results)
     
-    # 找出AIC或BIC最小的参数组合
-    successful_results = results_df[results_df['success']]
+    # 找出成功拟合且收敛的结果
+    successful_results = results_df[
+        (results_df['success']) & 
+        (results_df['converged'] if 'converged' in results_df.columns else True)
+    ]
+    
     if not successful_results.empty:
-        if criterion.lower() == 'aic':
-            best_params = successful_results.loc[successful_results['AIC'].idxmin()]['order']
+        # 根据选择的准则排序
+        criterion = criterion.lower()
+        if criterion == 'aic':
+            best_result = successful_results.loc[successful_results['AIC'].idxmin()]
         else:  # 使用BIC
-            best_params = successful_results.loc[successful_results['BIC'].idxmin()]['order']
+            best_result = successful_results.loc[successful_results['BIC'].idxmin()]
+        
+        best_params = best_result['order']
     else:
-        # 默认值
+        # 如果没有成功的结果，返回默认参数
         best_params = (1, 1, 1) if not seasonal else (1, 1, 1, 1, 0, 1, s)
+        st.warning("未找到合适的模型参数，使用默认参数")
     
     return best_params
 
@@ -795,12 +826,10 @@ def create_timeseries_chart(df, title='时间序列图', series_names=None):
     返回:
     dict: echarts图表选项
     """
-    # 假设数据已经在导入时按日期排序，这里只对尚未排序的数据进行处理
-    # 如果数据索引是日期类型但尚未排序，则进行排序
-    if isinstance(df.index, pd.DatetimeIndex) and not df.index.is_monotonic_increasing:
+    # 确保数据按日期排序（从旧到新）
+    if isinstance(df.index, pd.DatetimeIndex):
         df = df.sort_index()
-    # 如果有Date列但尚未排序，则进行排序
-    elif 'Date' in df.columns and not df['Date'].is_monotonic_increasing:
+    elif 'Date' in df.columns:
         df = df.sort_values(by='Date')
     
     # 准备X轴数据
