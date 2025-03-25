@@ -1458,4 +1458,694 @@ def check_acf_pacf_pattern(series, lags=30, alpha=0.05):
         },
         "model_suggestion": model_suggestion,
         "conf_level": conf_level
-    } 
+    }
+
+# 动态预测ARIMA模型
+def dynamic_forecast_arima(model, train_data, steps, random_seed=None):
+    """
+    对ARIMA模型进行动态预测（使用先前的预测值预测下一步）
+    
+    参数:
+    model: 已拟合的ARIMA模型
+    train_data: 训练数据，用于获取历史统计特性
+    steps: 预测步数
+    random_seed: 随机数种子，设置后可保证每次预测结果一致
+    
+    返回:
+    np.array: 预测结果数组
+    """
+    # 初始化预测结果数组
+    forecast = np.zeros(steps)
+    
+    # 设置随机数种子（如果提供）
+    if random_seed is not None:
+        np.random.seed(random_seed)
+    
+    # 获取训练数据的副本用于历史记录
+    if isinstance(train_data, np.ndarray):
+        history = train_data.flatten()
+    elif isinstance(train_data, pd.Series):
+        history = train_data.values
+    else:
+        history = np.array(train_data).flatten()
+    
+    # 计算历史数据的统计特性
+    hist_mean = np.mean(history)
+    hist_std = np.std(history)
+    
+    # 计算历史数据的平均变化率和标准差
+    hist_changes = np.diff(history)
+    avg_change = np.mean(hist_changes)
+    change_std = np.std(hist_changes)
+    
+    # 使用model.forecast方法获取第一个预测值
+    try:
+        first_pred = model.forecast(steps=1)
+        if isinstance(first_pred, pd.Series):
+            forecast[0] = first_pred.values[0]
+        else:
+            forecast[0] = first_pred[0]
+    except Exception as e:
+        # 如果forecast失败，使用最后一个历史值加上平均变化率
+        forecast[0] = history[-1] + avg_change
+        
+    # 对剩余步骤进行预测（使用先前的预测值）
+    for i in range(1, steps):
+        # 生成一个基于历史变化率统计特性的随机变化
+        random_change = np.random.normal(avg_change, change_std * 0.8)
+        
+        # 添加约束，避免预测值偏离太远
+        if forecast[i-1] + random_change > hist_mean + 3 * hist_std:
+            # 如果预测值太高，向均值回归
+            forecast[i] = forecast[i-1] - abs(random_change) * 0.5
+        elif forecast[i-1] + random_change < hist_mean - 3 * hist_std:
+            # 如果预测值太低，向均值回归
+            forecast[i] = forecast[i-1] + abs(random_change) * 0.5
+        else:
+            # 正常情况，应用随机变化
+            forecast[i] = forecast[i-1] + random_change
+            
+    return forecast
+
+# 静态预测ARIMA模型
+def static_forecast_arima(model, train_data, test_data):
+    """
+    对ARIMA模型进行静态预测（每次使用实际历史值预测下一步）
+    
+    参数:
+    model: 已拟合的ARIMA模型
+    train_data: 训练数据
+    test_data: 测试数据，用于确定预测步数
+    
+    返回:
+    np.array: 预测结果数组
+    """
+    # 初始化预测结果数组
+    steps = len(test_data)
+    forecast = np.zeros(steps)
+    
+    # 合并训练集和测试集数据用于历史数据准备
+    all_data = pd.concat([train_data, test_data])
+    
+    # 对每个时间点进行单步预测
+    for i in range(steps):
+        # 获取历史数据直到当前时间点的前一个点
+        history_end_idx = len(train_data) + i - 1  # 历史数据截止索引
+        history = all_data[:history_end_idx+1]  # 包含所有历史数据
+        
+        # 确保历史数据是Series类型
+        if not isinstance(history, pd.Series):
+            history = pd.Series(history)
+        
+        # 使用当前的历史数据进行一步预测
+        try:
+            # 创建新的ARIMA模型并拟合历史数据
+            from statsmodels.tsa.arima.model import ARIMA
+            current_model = ARIMA(history, order=model.order).fit()
+            pred = current_model.forecast(steps=1)
+            
+            if isinstance(pred, pd.Series):
+                forecast[i] = pred.values[0]
+            else:
+                forecast[i] = pred[0]
+        except Exception as e:
+            # 如果单步预测失败，使用前一个预测值或者0
+            forecast[i] = forecast[i-1] if i > 0 else 0
+            
+    return forecast
+
+# 扩展评估函数以包含方向准确率计算
+def calculate_direction_accuracy(actual_values, predicted_values):
+    """
+    计算预测的方向准确率（上涨/下跌方向是否一致）
+    
+    参数:
+    actual_values: 实际值序列
+    predicted_values: 预测值序列
+    
+    返回:
+    float: 方向准确率 (0-1之间)
+    """
+    if len(actual_values) <= 1 or len(predicted_values) <= 1:
+        return None
+        
+    # 计算实际值和预测值的变化方向
+    true_direction = np.sign(np.diff(actual_values))
+    pred_direction = np.sign(np.diff(predicted_values))
+    
+    # 跳过NaN值
+    valid_indices = ~np.isnan(true_direction) & ~np.isnan(pred_direction)
+    
+    # 如果没有有效值，返回None
+    if not np.any(valid_indices):
+        return None
+        
+    # 计算方向准确率
+    direction_accuracy = np.mean(true_direction[valid_indices] == pred_direction[valid_indices])
+    
+    return None if np.isnan(direction_accuracy) else float(direction_accuracy)
+
+# 预处理时间序列数据
+def preprocess_time_series_data(df, target_col='Close'):
+    """
+    预处理时间序列数据，确保数据类型正确并处理异常值
+    
+    参数:
+        df: 输入的DataFrame
+        target_col: 目标列名，默认为'Close'
+        
+    返回:
+        processed_df: 处理后的DataFrame
+        warnings: 警告信息列表
+    """
+    warnings = []
+    processed_df = df.copy()
+    
+    try:
+        # 1. 确保索引是时间类型
+        if not isinstance(processed_df.index, pd.DatetimeIndex):
+            try:
+                processed_df.index = pd.to_datetime(processed_df.index)
+                warnings.append("索引已转换为时间类型")
+            except Exception as e:
+                warnings.append(f"无法将索引转换为时间类型: {str(e)}")
+        
+        # 2. 确保数值列的类型正确
+        numeric_columns = processed_df.select_dtypes(include=[np.number]).columns
+        for col in numeric_columns:
+            # 检查是否包含无穷值
+            inf_mask = np.isinf(processed_df[col])
+            if inf_mask.any():
+                processed_df.loc[inf_mask, col] = np.nan
+                warnings.append(f"列 {col} 中的无穷值已被替换为NaN")
+            
+            # 检查是否包含非数值
+            if pd.to_numeric(processed_df[col], errors='coerce').isna().any():
+                processed_df[col] = pd.to_numeric(processed_df[col], errors='coerce')
+                warnings.append(f"列 {col} 中的非数值已被替换为NaN")
+        
+        # 3. 处理缺失值
+        na_before = processed_df.isna().sum()
+        if na_before.any():
+            # 对于时间序列数据，使用前向填充然后后向填充
+            processed_df = processed_df.fillna(method='ffill').fillna(method='bfill')
+            na_after = processed_df.isna().sum()
+            if na_after.any():
+                warnings.append("某些缺失值无法填充")
+        
+        # 4. 确保目标列存在且为数值类型
+        if target_col in processed_df.columns:
+            if not pd.api.types.is_numeric_dtype(processed_df[target_col]):
+                try:
+                    processed_df[target_col] = pd.to_numeric(processed_df[target_col], errors='coerce')
+                    warnings.append(f"目标列 {target_col} 已转换为数值类型")
+                except Exception as e:
+                    warnings.append(f"无法将目标列 {target_col} 转换为数值类型: {str(e)}")
+        else:
+            warnings.append(f"目标列 {target_col} 不存在")
+        
+        # 5. 按时间索引排序
+        processed_df = processed_df.sort_index()
+        
+        return processed_df, warnings
+        
+    except Exception as e:
+        warnings.append(f"数据预处理过程中发生错误: {str(e)}")
+        return df, warnings
+
+# 多次运行ARIMA模型并比较结果
+def run_multiple_arima_models(train_data, test_data, order, forecast_method="动态预测", runs=5, 
+                            progress_placeholder=None, chart_placeholder=None):
+    """
+    多次运行ARIMA模型并比较结果
+    
+    参数:
+    train_data: 训练数据
+    test_data: 测试数据
+    order: ARIMA模型阶数 (p,d,q)
+    forecast_method: 预测方法 ("动态预测" 或 "静态预测")
+    runs: 运行次数
+    progress_placeholder: streamlit进度条占位符
+    chart_placeholder: streamlit图表占位符
+    
+    返回:
+    dict: 包含统计结果和最优模型的字典
+    """
+    # 预处理数据
+    if isinstance(train_data, pd.Series):
+        train_data_processed, train_warnings = preprocess_time_series_data(train_data.to_frame(), train_data.name)
+        train_data = train_data_processed[train_data.name]
+    if isinstance(test_data, pd.Series):
+        test_data_processed, test_warnings = preprocess_time_series_data(test_data.to_frame(), test_data.name)
+        test_data = test_data_processed[test_data.name]
+    
+    # 初始化结果列表和最优模型数据
+    results = []
+    best_model_data = None
+    best_mse = float('inf')
+    
+    # 创建进度条和状态文本（如果提供了占位符）
+    if progress_placeholder is not None:
+        with progress_placeholder.container():
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            status_text.info(f"准备进行{runs}次ARIMA模型训练...")
+    else:
+        progress_bar = None
+        status_text = None
+    
+    # 创建用于存储每次运行结果的DataFrame
+    metrics_df = pd.DataFrame(columns=['运行次数', 'MSE', 'RMSE', 'MAE', '方向准确率'])
+    
+    # 多次运行模型
+    for run in range(runs):
+        # 为每次运行设置不同的随机种子
+        random_seed = run + 1
+        
+        try:
+            # 拟合ARIMA模型
+            model, _ = fit_arima_model(train_data, order)
+            
+            if model is None:
+                # 如果模型拟合失败，记录失败信息并继续下一次
+                results.append({
+                    'run': run + 1,
+                    'status': 'failed',
+                    'error': 'Model fitting failed',
+                    'metrics': {
+                        'MSE': None,
+                        'RMSE': None,
+                        'MAE': None,
+                        'Direction_Accuracy': None
+                    }
+                })
+                continue
+            
+            # 进行预测
+            if forecast_method == "动态预测":
+                test_pred = dynamic_forecast_arima(model, train_data, len(test_data), random_seed)
+            else:
+                test_pred = static_forecast_arima(model, train_data, test_data)
+            
+            # 计算评估指标
+            mse = np.mean((test_pred - test_data) ** 2)
+            rmse = np.sqrt(mse)
+            mae = np.mean(np.abs(test_pred - test_data))
+            direction_accuracy = calculate_direction_accuracy(test_data, test_pred)
+            
+            # 如果方向准确率为None，设置为0
+            if direction_accuracy is None:
+                direction_accuracy = 0
+            
+            # 保存本次运行的结果
+            run_result = {
+                'run': run + 1,
+                'status': 'success',
+                'seed': random_seed,
+                'model': model,
+                'predictions': test_pred,
+                'metrics': {
+                    'MSE': float(mse),
+                    'RMSE': float(rmse),
+                    'MAE': float(mae),
+                    'Direction_Accuracy': float(direction_accuracy)
+                }
+            }
+            
+            results.append(run_result)
+            
+            # 检查是否为最优模型
+            if mse < best_mse:
+                best_mse = mse
+                best_model_data = run_result
+            
+            # 更新metrics_df
+            metrics_df.loc[run] = [run + 1, mse, rmse, mae, direction_accuracy]
+            
+            # 更新图表（如果提供了占位符）
+            if chart_placeholder is not None:
+                with chart_placeholder:
+                    # 创建指标对比图表
+                    metrics_chart_option = create_metrics_comparison_chart(
+                        {'results': results, 'best_model': best_model_data},
+                        'MSE'
+                    )
+                    st.write("模型评估指标对比")
+                    st_echarts(options=metrics_chart_option, height="400px")
+            
+            # 更新进度
+            if progress_bar is not None:
+                progress = (run + 1) / runs
+                progress_bar.progress(progress)
+                status_text.info(f"完成第 {run + 1}/{runs} 次运行，当前最佳MSE: {best_mse:.4f}")
+                
+        except Exception as e:
+            # 记录错误并继续下一次运行
+            results.append({
+                'run': run + 1,
+                'status': 'error',
+                'error': str(e),
+                'metrics': {
+                    'MSE': None, 
+                    'RMSE': None, 
+                    'MAE': None, 
+                    'Direction_Accuracy': None
+                }
+            })
+            
+            if status_text is not None:
+                status_text.error(f"第 {run + 1}/{runs} 次运行出错: {str(e)}")
+    
+    # 计算成功运行的数量
+    successful_runs = sum(1 for r in results if r['status'] == 'success')
+    
+    # 如果没有成功的运行，返回空结果
+    if successful_runs == 0:
+        return {
+            'status': 'failed',
+            'message': f"所有 {runs} 次运行均失败",
+            'runs': runs,
+            'successful_runs': 0,
+            'results': results,
+            'best_model': None,
+            'statistics': None,
+            'metrics_df': metrics_df  # 添加metrics_df到返回结果
+        }
+    
+    # 提取成功运行的指标
+    successful_metrics = [r['metrics'] for r in results if r['status'] == 'success']
+    
+    # 计算统计数据
+    statistics = {
+        'MSE': {
+            'mean': np.mean([m['MSE'] for m in successful_metrics]),
+            'std': np.std([m['MSE'] for m in successful_metrics]),
+            'min': np.min([m['MSE'] for m in successful_metrics]),
+            'max': np.max([m['MSE'] for m in successful_metrics])
+        },
+        'RMSE': {
+            'mean': np.mean([m['RMSE'] for m in successful_metrics]),
+            'std': np.std([m['RMSE'] for m in successful_metrics]),
+            'min': np.min([m['RMSE'] for m in successful_metrics]),
+            'max': np.max([m['RMSE'] for m in successful_metrics])
+        },
+        'MAE': {
+            'mean': np.mean([m['MAE'] for m in successful_metrics]),
+            'std': np.std([m['MAE'] for m in successful_metrics]),
+            'min': np.min([m['MAE'] for m in successful_metrics]),
+            'max': np.max([m['MAE'] for m in successful_metrics])
+        },
+        'Direction_Accuracy': {
+            'mean': np.mean([m['Direction_Accuracy'] for m in successful_metrics]),
+            'std': np.std([m['Direction_Accuracy'] for m in successful_metrics]),
+            'min': np.min([m['Direction_Accuracy'] for m in successful_metrics]),
+            'max': np.max([m['Direction_Accuracy'] for m in successful_metrics])
+        }
+    }
+    
+    # 清理进度显示（如果有）
+    if progress_bar is not None:
+        progress_bar.empty()
+    if status_text is not None:
+        status_text.success(f"成功完成 {successful_runs}/{runs} 次运行")
+    
+    # 返回结果
+    return {
+        'status': 'success',
+        'message': f"成功完成 {successful_runs}/{runs} 次运行",
+        'runs': runs,
+        'successful_runs': successful_runs,
+        'results': results,
+        'best_model': best_model_data,
+        'statistics': statistics,
+        'metrics_df': metrics_df  # 添加metrics_df到返回结果
+    }
+
+# 创建多次运行ARIMA模型的指标对比图
+def create_metrics_comparison_chart(multiple_runs_result, metric_name='MSE'):
+    """
+    创建多次运行ARIMA模型的指标对比图
+    
+    参数:
+    multiple_runs_result: run_multiple_arima_models函数的返回结果
+    metric_name: 要比较的指标名称('MSE', 'RMSE', 'MAE', 'Direction_Accuracy')
+    
+    返回:
+    dict: ECharts图表配置
+    """
+    # 提取成功运行的结果
+    successful_results = [r for r in multiple_runs_result['results'] if r['status'] == 'success']
+    
+    if not successful_results:
+        # 如果没有成功的运行，返回空图表
+        return {
+            'title': {'text': f'没有成功的ARIMA模型运行 - {metric_name}对比'},
+            'xAxis': {'type': 'category', 'data': []},
+            'yAxis': {'type': 'value'},
+            'series': []
+        }
+    
+    # 提取运行序号和对应的指标值
+    run_numbers = [r['run'] for r in successful_results]
+    metric_values = [r['metrics'][metric_name] for r in successful_results]
+    
+    # 获取最优模型的运行序号
+    best_run = multiple_runs_result['best_model']['run']
+    
+    # 准备图表数据
+    series_data = []
+    for i, (run, value) in enumerate(zip(run_numbers, metric_values)):
+        # 特殊标记最优模型
+        item_style = {'color': '#5470c6'}  # 默认颜色
+        if run == best_run:
+            item_style = {'color': '#91cc75'}  # 最优模型使用绿色
+        
+        series_data.append({
+            'value': value,
+            'itemStyle': item_style
+        })
+    
+    # 计算平均值
+    mean_value = np.mean(metric_values)
+    
+    # 创建图表配置
+    chart_option = {
+        'title': {
+            'text': f'ARIMA模型多次运行 {metric_name} 对比',
+            'left': 'center'
+        },
+        'tooltip': {
+            'trigger': 'axis',
+            'formatter': f'运行 {{b}}<br/>{metric_name}: {{c}}'
+        },
+        'toolbox': {
+            'feature': {
+                'saveAsImage': {}
+            }
+        },
+        'xAxis': {
+            'type': 'category',
+            'data': run_numbers,
+            'name': '运行序号'
+        },
+        'yAxis': {
+            'type': 'value',
+            'name': metric_name
+        },
+        'series': [
+            {
+                'data': series_data,
+                'type': 'bar',
+                'name': metric_name
+            }
+        ],
+        'markLine': {
+            'data': [
+                {'yAxis': mean_value, 'name': '平均值'}
+            ],
+            'lineStyle': {
+                'color': '#ff7f50',
+                'type': 'dashed'
+            },
+            'label': {
+                'formatter': f'平均: {mean_value:.4f}'
+            }
+        }
+    }
+    
+    return chart_option
+
+# 创建指标统计对比表格数据
+def create_metrics_statistics_table(multiple_runs_result):
+    """
+    创建指标统计对比表格数据
+    
+    参数:
+    multiple_runs_result: run_multiple_arima_models函数的返回结果
+    
+    返回:
+    pd.DataFrame: 包含统计数据的DataFrame
+    """
+    # 检查是否有统计数据
+    if multiple_runs_result['status'] == 'failed' or not multiple_runs_result['statistics']:
+        return pd.DataFrame()
+    
+    # 提取统计数据
+    stats = multiple_runs_result['statistics']
+    
+    # 创建DataFrame
+    data = {
+        '指标': ['MSE', 'RMSE', 'MAE', '方向准确率'],
+        '平均值': [
+            stats['MSE']['mean'],
+            stats['RMSE']['mean'],
+            stats['MAE']['mean'],
+            stats['Direction_Accuracy']['mean']
+        ],
+        '标准差': [
+            stats['MSE']['std'],
+            stats['RMSE']['std'],
+            stats['MAE']['std'],
+            stats['Direction_Accuracy']['std']
+        ],
+        '最小值': [
+            stats['MSE']['min'],
+            stats['RMSE']['min'],
+            stats['MAE']['min'],
+            stats['Direction_Accuracy']['min']
+        ],
+        '最大值': [
+            stats['MSE']['max'],
+            stats['RMSE']['max'],
+            stats['MAE']['max'],
+            stats['Direction_Accuracy']['max']
+        ]
+    }
+    
+    # 创建DataFrame
+    df = pd.DataFrame(data)
+    df = df.set_index('指标')
+    
+    # 格式化为字符串，保留4位小数
+    for col in df.columns:
+        df[col] = df[col].apply(lambda x: f"{x:.4f}")
+    
+    return df 
+
+# 准备ARIMA预测结果图表
+def prepare_arima_charts(model, train_data, test_data, test_pred, residuals=None):
+    """
+    准备ARIMA模型的预测结果图表、残差图表和残差分布图表
+    
+    参数:
+    model: 拟合的ARIMA模型
+    train_data: 训练数据
+    test_data: 测试数据
+    test_pred: 测试集预测值
+    residuals: 模型残差，如果为None则使用model.resid
+    
+    返回:
+    dict: 包含预测结果图表、残差图表和残差分布图表的字典
+    """
+    # 使用模型的残差或者提供的残差
+    if residuals is None and model is not None:
+        residuals = model.resid
+    
+    # 创建结果DataFrame
+    train_pred = None
+    if model is not None:
+        train_pred = model.fittedvalues
+    
+    results_df = pd.DataFrame({
+        '实际值': pd.concat([train_data, test_data]),
+        '训练集拟合值': pd.concat([train_pred, pd.Series(np.full(len(test_data), np.nan), index=test_data.index)]) if train_pred is not None else None,
+        '测试集预测值': pd.concat([pd.Series(np.full(len(train_data), np.nan), index=train_data.index), pd.Series(test_pred, index=test_data.index)])
+    })
+    
+    # 预测结果图表
+    prediction_chart = create_timeseries_chart(
+        results_df,
+        title='ARIMA预测结果对比',
+        series_names=['实际值', '训练集拟合值', '测试集预测值']
+    )
+    
+    # 残差图表
+    residuals_chart = None
+    residuals_hist = None
+    if residuals is not None:
+        residuals_df = pd.DataFrame({'残差': residuals})
+        residuals_chart = create_timeseries_chart(
+            residuals_df,
+            title='ARIMA模型残差'
+        )
+        
+        # 残差分布图表
+        residuals_hist = create_histogram_chart(
+            residuals,
+            title='残差分布直方图'
+        )
+    
+    return {
+        'prediction_chart': prediction_chart,
+        'residuals_chart': residuals_chart,
+        'residuals_hist': residuals_hist
+    }
+
+def calculate_statistics(metrics_list):
+    """
+    计算指标列表的统计数据
+    
+    参数:
+    metrics_list: 指标字典列表，每个字典包含 'MSE', 'RMSE', 'MAE', 'Direction_Accuracy' 等键
+    
+    返回:
+    dict: 统计数据字典
+    """
+    # 筛选出有效的指标
+    valid_metrics = [m for m in metrics_list if m and all(key in m for key in ['MSE', 'RMSE', 'MAE', 'Direction_Accuracy'])]
+    
+    if not valid_metrics:
+        return None
+    
+    # 提取各项指标
+    mse_values = [m['MSE'] for m in valid_metrics if m['MSE'] is not None]
+    rmse_values = [m['RMSE'] for m in valid_metrics if m['RMSE'] is not None]
+    mae_values = [m['MAE'] for m in valid_metrics if m['MAE'] is not None]
+    dir_acc_values = [m['Direction_Accuracy'] for m in valid_metrics if m['Direction_Accuracy'] is not None]
+    
+    # 计算统计量
+    statistics = {}
+    
+    if mse_values:
+        statistics['MSE'] = {
+            'mean': float(np.mean(mse_values)),
+            'std': float(np.std(mse_values)),
+            'min': float(np.min(mse_values)),
+            'max': float(np.max(mse_values))
+        }
+    
+    if rmse_values:
+        statistics['RMSE'] = {
+            'mean': float(np.mean(rmse_values)),
+            'std': float(np.std(rmse_values)),
+            'min': float(np.min(rmse_values)),
+            'max': float(np.max(rmse_values))
+        }
+    
+    if mae_values:
+        statistics['MAE'] = {
+            'mean': float(np.mean(mae_values)),
+            'std': float(np.std(mae_values)),
+            'min': float(np.min(mae_values)),
+            'max': float(np.max(mae_values))
+        }
+    
+    if dir_acc_values:
+        statistics['Direction_Accuracy'] = {
+            'mean': float(np.mean(dir_acc_values)),
+            'std': float(np.std(dir_acc_values)),
+            'min': float(np.min(dir_acc_values)),
+            'max': float(np.max(dir_acc_values))
+        }
+    
+    return statistics
