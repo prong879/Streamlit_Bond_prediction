@@ -729,6 +729,14 @@ def evaluate_arima_model(test_data, forecast_values, train_data=None):
     test_data = test_data[:min_len]
     forecast_values = forecast_values[:min_len]
     
+    # 移除任何NaN值
+    valid_mask = ~np.isnan(test_data) & ~np.isnan(forecast_values)
+    test_data = test_data[valid_mask]
+    forecast_values = forecast_values[valid_mask]
+    
+    if len(test_data) == 0:
+        return None
+    
     # 计算评估指标
     # MSE - 均方误差
     mse = np.mean((forecast_values - test_data) ** 2)
@@ -1741,21 +1749,33 @@ def run_multiple_arima_models(train_data, test_data, order, forecast_method="动
                 })
                 continue
             
+            # 获取差分阶数
+            d = order[1]
+            
             # 进行预测
             if forecast_method == "动态预测":
                 test_pred = dynamic_forecast_arima(model, train_data, len(test_data), random_seed)
             else:
                 test_pred = static_forecast_arima(model, train_data, test_data)
             
-            # 计算评估指标
-            mse = np.mean((test_pred - test_data) ** 2)
-            rmse = np.sqrt(mse)
-            mae = np.mean(np.abs(test_pred - test_data))
-            direction_accuracy = calculate_direction_accuracy(test_data, test_pred)
+            # 如果有差分，调整测试数据
+            if d > 0:
+                test_data_adj = test_data[d:]
+                test_pred_adj = test_pred[d:]
+            else:
+                test_data_adj = test_data
+                test_pred_adj = test_pred
             
-            # 如果方向准确率为None，设置为0
-            if direction_accuracy is None:
-                direction_accuracy = 0
+            # 计算评估指标
+            metrics = evaluate_arima_model(test_data_adj, test_pred_adj)
+            
+            if metrics is None:
+                continue
+            
+            mse = metrics['MSE']
+            rmse = metrics['RMSE']
+            mae = metrics['MAE']
+            direction_accuracy = metrics['Direction_Accuracy']
             
             # 保存本次运行的结果
             run_result = {
@@ -1764,121 +1784,50 @@ def run_multiple_arima_models(train_data, test_data, order, forecast_method="动
                 'seed': random_seed,
                 'model': model,
                 'predictions': test_pred,
-                'metrics': {
-                    'MSE': float(mse),
-                    'RMSE': float(rmse),
-                    'MAE': float(mae),
-                    'Direction_Accuracy': float(direction_accuracy)
-                }
+                'metrics': metrics
             }
             
             results.append(run_result)
             
-            # 检查是否为最优模型
-            if mse < best_mse:
+            # 更新最优模型
+            if mse is not None and mse < best_mse:
                 best_mse = mse
                 best_model_data = run_result
             
-            # 更新metrics_df
-            metrics_df.loc[run] = [run + 1, mse, rmse, mae, direction_accuracy]
-            
-            # 更新图表（如果提供了占位符）
-            if chart_placeholder is not None:
-                with chart_placeholder:
-                    # 创建指标对比图表
-                    metrics_chart_option = create_metrics_comparison_chart(
-                        {'results': results, 'best_model': best_model_data},
-                        'MSE'
-                    )
-                    st.write("模型评估指标对比")
-                    st_echarts(options=metrics_chart_option, height="400px")
-            
-            # 更新进度
+            # 更新进度条
             if progress_bar is not None:
                 progress = (run + 1) / runs
                 progress_bar.progress(progress)
-                status_text.info(f"完成第 {run + 1}/{runs} 次运行，当前最佳MSE: {best_mse:.4f}")
-                
+                status_text.info(f"已完成 {run + 1}/{runs} 次训练")
+        
         except Exception as e:
-            # 记录错误并继续下一次运行
+            # 记录错误信息
             results.append({
                 'run': run + 1,
-                'status': 'error',
+                'status': 'failed',
                 'error': str(e),
                 'metrics': {
-                    'MSE': None, 
-                    'RMSE': None, 
-                    'MAE': None, 
+                    'MSE': None,
+                    'RMSE': None,
+                    'MAE': None,
                     'Direction_Accuracy': None
                 }
             })
             
             if status_text is not None:
-                status_text.error(f"第 {run + 1}/{runs} 次运行出错: {str(e)}")
+                status_text.error(f"第 {run + 1} 次训练失败: {str(e)}")
     
-    # 计算成功运行的数量
-    successful_runs = sum(1 for r in results if r['status'] == 'success')
-    
-    # 如果没有成功的运行，返回空结果
-    if successful_runs == 0:
-        return {
-            'status': 'failed',
-            'message': f"所有 {runs} 次运行均失败",
-            'runs': runs,
-            'successful_runs': 0,
-            'results': results,
-            'best_model': None,
-            'statistics': None,
-            'metrics_df': metrics_df  # 添加metrics_df到返回结果
-        }
-    
-    # 提取成功运行的指标
-    successful_metrics = [r['metrics'] for r in results if r['status'] == 'success']
-    
-    # 计算统计数据
-    statistics = {
-        'MSE': {
-            'mean': np.mean([m['MSE'] for m in successful_metrics]),
-            'std': np.std([m['MSE'] for m in successful_metrics]),
-            'min': np.min([m['MSE'] for m in successful_metrics]),
-            'max': np.max([m['MSE'] for m in successful_metrics])
-        },
-        'RMSE': {
-            'mean': np.mean([m['RMSE'] for m in successful_metrics]),
-            'std': np.std([m['RMSE'] for m in successful_metrics]),
-            'min': np.min([m['RMSE'] for m in successful_metrics]),
-            'max': np.max([m['RMSE'] for m in successful_metrics])
-        },
-        'MAE': {
-            'mean': np.mean([m['MAE'] for m in successful_metrics]),
-            'std': np.std([m['MAE'] for m in successful_metrics]),
-            'min': np.min([m['MAE'] for m in successful_metrics]),
-            'max': np.max([m['MAE'] for m in successful_metrics])
-        },
-        'Direction_Accuracy': {
-            'mean': np.mean([m['Direction_Accuracy'] for m in successful_metrics]),
-            'std': np.std([m['Direction_Accuracy'] for m in successful_metrics]),
-            'min': np.min([m['Direction_Accuracy'] for m in successful_metrics]),
-            'max': np.max([m['Direction_Accuracy'] for m in successful_metrics])
-        }
-    }
-    
-    # 清理进度显示（如果有）
-    if progress_bar is not None:
-        progress_bar.empty()
-    if status_text is not None:
-        status_text.success(f"成功完成 {successful_runs}/{runs} 次运行")
+    # 计算统计信息
+    successful_results = [r for r in results if r['status'] == 'success']
+    statistics = calculate_statistics([r['metrics'] for r in successful_results]) if successful_results else None
     
     # 返回结果
     return {
-        'status': 'success',
-        'message': f"成功完成 {successful_runs}/{runs} 次运行",
-        'runs': runs,
-        'successful_runs': successful_runs,
+        'status': 'success' if best_model_data is not None else 'failed',
+        'message': '成功找到最优模型' if best_model_data is not None else '所有运行都失败',
         'results': results,
         'best_model': best_model_data,
-        'statistics': statistics,
-        'metrics_df': metrics_df  # 添加metrics_df到返回结果
+        'statistics': statistics
     }
 
 # 创建多次运行ARIMA模型的指标对比图
@@ -2055,7 +2004,18 @@ def prepare_arima_charts(model, train_data, test_data, test_pred, residuals=None
     train_pred = None
     if model is not None:
         train_pred = model.fittedvalues
+        
+        # 获取差分阶数
+        d = model.model.order[1] if hasattr(model.model, 'order') else 0
+        
+        # 如果有差分，调整训练集预测值和测试集预测值的索引
+        if d > 0:
+            # 对于训练集，跳过前d个值
+            train_data = train_data[d:]
+            train_pred = train_pred[d:]
+            residuals = residuals[d:]
     
+    # 创建结果DataFrame，确保索引对齐
     results_df = pd.DataFrame({
         '实际值': pd.concat([train_data, test_data]),
         '训练集拟合值': pd.concat([train_pred, pd.Series(np.full(len(test_data), np.nan), index=test_data.index)]) if train_pred is not None else None,
