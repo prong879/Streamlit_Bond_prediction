@@ -3,7 +3,7 @@ streamlit>=1.24.0
 streamlit-echarts>=0.4.0
 
 # 数据处理和分析
-numpy>=1.24.3
+numpy==1.26.4
 pandas>=1.5.3
 scipy>=1.10.0
 
@@ -22,6 +22,11 @@ scikit-learn>=1.2.2
 
 # 技术分析指标
 ta>=0.10.0
+
+# 数据库
+pymysql
+sqlalchemy
+mysql-connector-python
 
 # 统计分析和特征选择
 statsmodels>=0.13.5

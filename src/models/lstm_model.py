@@ -291,7 +291,9 @@ def evaluate_lstm_model(model, X_test, y_test, target_scaler=None):
         'MAE': float(mae),
         'MAPE': float(mape) if not np.isnan(mape) else None,
         'Direction_Accuracy': float(direction_accuracy),
-        'Test_Loss': float(test_loss.item())
+        'Test_Loss': float(test_loss.item()),
+        'test_predictions': test_predictions.flatten(),
+        'test_actual': test_actual.flatten()
     }
 
 # 绘制训练历史
@@ -427,7 +429,7 @@ def load_model(model_path, params_path=None, device=None):
         raise Exception(f"加载模型时出错: {str(e)}")
 
 # 准备LSTM模型训练所需的数据
-def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_length=20, train_ratio=0.8, val_ratio=0.15):
+def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_length=20, train_ratio=0.8, val_ratio=0.15, status_text=None):
     """
     准备LSTM模型训练所需的数据
     
@@ -438,6 +440,7 @@ def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_le
         sequence_length: 输入序列长度
         train_ratio: 训练集比例
         val_ratio: 验证集比例
+        status_text: 状态文本显示组件（可选）
         
     返回:
         数据集和缩放器的字典
@@ -471,11 +474,24 @@ def prepare_data_for_lstm(df, selected_features, target_col='Close', sequence_le
     # 划分训练、验证和测试集
     total_samples = len(X)
     train_size = int(total_samples * train_ratio)
-    val_size = int(total_samples * val_ratio)
+    # 修复：动态计算验证集大小，确保测试集比例正确
+    test_size = int(total_samples * (1 - train_ratio))
+    val_size = total_samples - train_size - test_size
+    
+    # 确保验证集至少有一定的大小（至少5个样本或总样本的5%）
+    min_val_size = max(5, int(total_samples * 0.05))
+    if val_size < min_val_size and total_samples > min_val_size * 2:
+        val_size = min_val_size
+        test_size = total_samples - train_size - val_size
     
     X_train, y_train = X[:train_size], y[:train_size]
     X_val, y_val = X[train_size:train_size+val_size], y[train_size:train_size+val_size]
     X_test, y_test = X[train_size+val_size:], y[train_size+val_size:]
+    
+    if status_text is not None:
+        status_text.info(f"数据准备完成! 原始数据: {len(df)} 行, 序列数据: {total_samples} 个序列 (序列长度: {sequence_length})")
+        status_text.info(f"训练集: {X_train.shape[0]} ({X_train.shape[0]/total_samples*100:.1f}%), 验证集: {X_val.shape[0]} ({X_val.shape[0]/total_samples*100:.1f}%), 测试集: {X_test.shape[0]} ({X_test.shape[0]/total_samples*100:.1f}%)")
+        status_text.info("开始训练LSTM模型...")
     
     return {
         'X_train': X_train,
@@ -632,38 +648,69 @@ def run_lstm_training(
     else:
         feature_list = selected_features
     
-    # 提取选定的特征
-    feature_data = df[feature_list].values
-    target_data = df['Close'].values.reshape(-1, 1) if 'Close' in df.columns else df[df.columns[0]].values.reshape(-1, 1)
+    # 修复：先按train_test_ratio划分原始数据，与ARIMA保持一致
+    original_data_length = len(df)
+    train_size_original = int(original_data_length * train_test_ratio)
     
-    # 数据归一化
+    # 划分原始数据
+    train_df = df[:train_size_original]
+    test_df = df[train_size_original:]
+    
+    # 提取训练集和测试集的特征和目标数据
+    train_feature_data = train_df[feature_list].values
+    train_target_data = train_df['Close'].values.reshape(-1, 1) if 'Close' in train_df.columns else train_df[train_df.columns[0]].values.reshape(-1, 1)
+    
+    test_feature_data = test_df[feature_list].values
+    test_target_data = test_df['Close'].values.reshape(-1, 1) if 'Close' in test_df.columns else test_df[test_df.columns[0]].values.reshape(-1, 1)
+    
+    # 数据归一化（使用训练集的统计信息）
     feature_scaler = MinMaxScaler()
     target_scaler = MinMaxScaler()
     
-    feature_data = feature_scaler.fit_transform(feature_data)
-    target_data = target_scaler.fit_transform(target_data)
+    train_feature_data = feature_scaler.fit_transform(train_feature_data)
+    train_target_data = target_scaler.fit_transform(train_target_data)
     
-    # 创建时间序列数据
-    X, y = create_sequences(
-        np.column_stack((feature_data, target_data)), 
-        int(sequence_length)
-    )
+    # 对测试集使用训练集的归一化参数
+    test_feature_data = feature_scaler.transform(test_feature_data)
+    test_target_data = target_scaler.transform(test_target_data)
     
-    # 分离目标变量
-    X = X[:, :, :-1]  # 移除最后一列（目标变量）
-    y = y[:, -1:]     # 只取最后一列（目标变量）
+    # 在训练集上创建时间序列数据
+    train_combined = np.column_stack((train_feature_data, train_target_data))
+    X_train_seq, y_train_seq = create_sequences(train_combined, int(sequence_length))
     
-    # 划分训练、验证和测试集
-    total_samples = len(X)
-    train_size = int(total_samples * train_test_ratio)
-    val_size = int(total_samples * 0.15)  # 固定15%的验证集
+    # 分离训练集的特征和目标变量
+    X_train_seq = X_train_seq[:, :, :-1]  # 移除最后一列（目标变量）
+    y_train_seq = y_train_seq[:, -1:]     # 只取最后一列（目标变量）
     
-    X_train, y_train = X[:train_size], y[:train_size]
-    X_val, y_val = X[train_size:train_size+val_size], y[train_size:train_size+val_size]
-    X_test, y_test = X[train_size+val_size:], y[train_size+val_size:]
+    # 在测试集上创建时间序列数据
+    test_combined = np.column_stack((test_feature_data, test_target_data))
+    X_test_seq, y_test_seq = create_sequences(test_combined, int(sequence_length))
+    
+    # 分离测试集的特征和目标变量
+    X_test_seq = X_test_seq[:, :, :-1]  # 移除最后一列（目标变量）
+    y_test_seq = y_test_seq[:, -1:]     # 只取最后一列（目标变量）
+    
+    # 从训练集序列中划分训练集和验证集
+    train_seq_count = len(X_train_seq)
+    val_ratio = 0.15  # 固定验证集比例为15%
+    val_size = int(train_seq_count * val_ratio)
+    train_size = train_seq_count - val_size
+    
+    X_train = X_train_seq[:train_size]
+    y_train = y_train_seq[:train_size]
+    X_val = X_train_seq[train_size:]
+    y_val = y_train_seq[train_size:]
+    
+    # 测试集直接使用
+    X_test = X_test_seq
+    y_test = y_test_seq
     
     if status_text is not None:
-        status_text.info(f"数据准备完成! 训练集大小: {X_train.shape[0]}, 验证集大小: {X_val.shape[0]}, 测试集大小: {X_test.shape[0]}。开始训练LSTM模型...")
+        status_text.info(f"数据准备完成! 原始数据: {original_data_length} 行")
+        status_text.info(f"原始训练集: {len(train_df)} 行, 原始测试集: {len(test_df)} 行")
+        status_text.info(f"序列训练集: {X_train.shape[0]} 个, 序列验证集: {X_val.shape[0]} 个, 序列测试集: {X_test.shape[0]} 个")
+        status_text.info(f"✅ 测试集大小与ARIMA保持一致: {len(test_df)} 个原始数据点对应 {X_test.shape[0]} 个序列")
+        status_text.info("开始训练LSTM模型...")
     
     # 设置模型参数
     model_params = {
@@ -936,118 +983,7 @@ def select_features(df, correlation_threshold=0.5, vif_threshold=10.0, p_value_t
         }
 
 
-# 筛选后的特征的相关性热力图
-def create_correlation_heatmap(corr_matrix, filtered_features=None):
-    """
-    创建相关性热力图
-    
-    Args:
-        corr_matrix: 相关性矩阵DataFrame
-        filtered_features: 筛选后的特征列表，如果提供则只显示这些特征
-        
-    Returns:
-        dict: ECharts配置项字典
-    """
-    # 检查相关矩阵是否为空
-    if corr_matrix is None or corr_matrix.empty:
-        # 返回一个提示信息图表
-        return {
-            'title': {
-                'text': '相关性热力图 - 无数据',
-                'left': 'center'
-            },
-            'xAxis': {'type': 'category', 'data': []},
-            'yAxis': {'type': 'category', 'data': []},
-            'series': []
-        }
-    
-    # 准备数据
-    if filtered_features is not None and len(filtered_features) > 0:
-        # 只保留筛选后的特征
-        features = [f for f in filtered_features if f in corr_matrix.columns]
-        # 检查筛选后的特征列表是否为空
-        if not features:
-            features = corr_matrix.columns.tolist()
-        corr_matrix = corr_matrix.loc[features, features]
-    else:
-        features = corr_matrix.columns.tolist()
-    
-    data = []
-    x_data = features.copy()
-    y_data = features.copy()
-    
-    # 转换数据格式为ECharts所需的格式
-    for i in range(len(features)):
-        for j in range(len(features)):
-            value = corr_matrix.iloc[i, j]
-            # 保留4位小数
-            rounded_value = round(float(value), 4)
-            data.append([i, j, rounded_value])
-    
-    # 创建相关性热力图ECharts配置
-    option = {
-        'tooltip': {
-            'position': 'top',
-        },
-        'grid': {
-            'top': '0',
-            'bottom': '10%',
-            'left': '15%'
-        },
-        'xAxis': {
-            'type': 'category',
-            'data': x_data,
-            'splitArea': {
-                'show': True
-            },
-            'axisLabel': {
-                'interval': 0,
-                'rotate': 45,
-                'formatter': {
-                    'function': "function(value) { if(value.length > 15) return value.substring(0,12) + '...'; return value; }"
-                }
-            }
-        },
-        'yAxis': {
-            'type': 'category',
-            'data': y_data,
-            'splitArea': {
-                'show': True
-            },
-            'axisLabel': {
-                'formatter': {
-                    'function': "function(value) { if(value.length > 15) return value.substring(0,12) + '...'; return value; }"
-                }
-            }
-        },
-        'visualMap': {
-            'min': -1,
-            'max': 1,
-            'calculable': True,
-            'orient': 'vertical',
-            'left': '0',
-            'bottom': '65',
-            'inRange': {
-                'color': ['#313695', '#4575b4', '#74add1', '#abd9e9', '#e0f3f8', '#ffffbf', '#fee090', '#fdae61', '#f46d43', '#d73027', '#a50026']
-            }
-        },
-        'series': [{
-            'name': '相关性',
-            'type': 'heatmap',
-            'data': data,
-            'label': {
-                'show': True
-            },
-            'emphasis': {
-                'itemStyle': {
-                    'shadowBlur': 10,
-                    'shadowColor': 'rgba(0, 0, 0, 0.5)'
-                }
-            }
-        }]
-    }
-    
-    return option 
+# 注意：create_correlation_heatmap函数已移至src/utils/chart_utils.py，避免重复定义 
 
 # 创建统计显著性图表
 def create_significance_charts(sig_data, p_value_threshold=0.05):

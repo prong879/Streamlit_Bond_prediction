@@ -24,6 +24,8 @@ import os  # 操作系统接口
 import ta  # 技术分析库，用于计算技术指标
 from streamlit_echarts import st_echarts  # ECharts图表组件
 from src.utils.session import get_state, set_state  # 状态管理工具
+from src.utils.data_processing import fix_datetime_for_arrow, safe_dataframe_display, normalize_column_names  # 数据处理工具
+from src.utils.chart_utils import create_correlation_heatmap, create_echarts_kline_volume, calculate_ma  # 图表工具
 import torch  # 导入PyTorch，用于解决兼容性问题
 import re  # 导入正则表达式模块，用于列名匹配
 
@@ -33,69 +35,7 @@ torch.classes.__path__ = []
 # 设置页面标题
 st.title("📊 数据查看")
 
-def normalize_column_names(df):
-    """
-    标准化股票数据的列名，处理常见的变体形式
-    
-    参数:
-        df (DataFrame): 原始数据框
-        
-    返回:
-        DataFrame: 列名标准化后的数据框
-        dict: 列名的映射关系
-    """
-    # 标准列名
-    standard_columns = {
-        'Date': ['date', 'time', 'datetime', 'timestamp', 'trade_date', 'trading_date'],
-        'Open': ['open', 'open_price', 'opening', 'first', 'first_price'],
-        'High': ['high', 'high_price', 'highest', 'max', 'maximum', 'highest_price'],
-        'Low': ['low', 'low_price', 'lowest', 'min', 'minimum', 'lowest_price'],
-        'Close': ['close', 'close_price', 'closing', 'last', 'last_price', 'close/last', 'adj_close', 'adjusted_close', "p", "price", "y"],
-        'Volume': ['volume', 'vol', 'quantity', 'turnover', 'trade_volume', 'trading_volume']
-    }
-    
-    # 创建映射字典
-    column_mapping = {}
-    rename_info = []
-    
-    # 获取当前列名的小写形式
-    lowercase_columns = {col.lower(): col for col in df.columns}
-    processed_columns = set()  # 添加一个集合记录已处理的列
-    
-    # 遍历标准列名及其变体
-    for standard, variants in standard_columns.items():
-        # 如果标准列名已存在，跳过
-        if standard in df.columns:
-            continue
-        
-        # 检查变体是否存在
-        for variant in variants:
-            # 精确匹配
-            if variant in lowercase_columns:
-                original_name = lowercase_columns[variant]
-                if original_name not in processed_columns:  # 检查是否已处理
-                    column_mapping[original_name] = standard
-                    rename_info.append(f"'{original_name}' → '{standard}'")
-                    processed_columns.add(original_name)  # 标记为已处理
-                break
-                
-            # 部分匹配（比如包含特殊字符或空格的情况）
-            for col in lowercase_columns.values():
-                if col in processed_columns:  # 跳过已处理的列
-                    continue
-                # 使用正则表达式处理特殊情况，如 "close/last", "adj. close" 等
-                pattern = r'\b' + re.escape(variant) + r'\b'
-                if re.search(pattern, col.lower()) or variant in col.lower().replace(" ", "").replace("_", "").replace("-", ""):
-                    column_mapping[col] = standard
-                    rename_info.append(f"'{col}' → '{standard}'")
-                    processed_columns.add(col)  # 标记为已处理
-                    break
-    
-    # 重命名列
-    if column_mapping:
-        df = df.rename(columns=column_mapping)
-        
-    return df, rename_info
+# 页面布局和数据处理逻辑开始
 
 def sort_by_date(df):
     """
@@ -123,22 +63,7 @@ def sort_by_date(df):
     
     return df
 
-def calculate_ma(df, periods=[5, 10, 20, 30]):
-    """
-    计算移动平均线
-    
-    参数:
-        df (DataFrame): 包含股票价格数据的DataFrame
-        periods (list): 移动平均线的周期列表，默认为[5, 10, 20, 30]
-        
-    返回:
-        DataFrame: 包含移动平均线的DataFrame，结果保留两位小数
-    """
-    df_ma = df.copy()
-    for period in periods:
-        # 计算移动平均线并保留两位小数
-        df_ma[f'MA{period}'] = df['Close'].rolling(window=period).mean().round(3)
-    return df_ma
+# 移动平均线计算已移至 src/utils/chart_utils.py
 
 def calculate_technical_indicators(df):
     """
@@ -296,369 +221,9 @@ def load_example_data():
         st.error(f"加载示例数据失败：{str(e)}")
         return None
 
-def create_correlation_heatmap(df):
-    """
-    创建相关性热力图配置
-    
-    功能:
-    - 计算特征间的相关性矩阵
-    - 根据与收盘价的相关性对特征进行排序
-    - 配置ECharts热力图样式
-    - 支持交互式数据展示
-    
-    参数:
-        df (DataFrame): 包含技术指标的DataFrame
-        
-    返回:
-        dict: ECharts配置项字典
-    """
-    # 计算相关性矩阵
-    corr_matrix = df.corr().round(2)
-    
-    # 计算相关性矩阵的最小值和最大值
-    corr_min = corr_matrix.min().min()
-    corr_max = corr_matrix.max().max()
-    
-    # 根据与Close（收盘价）的相关性排序特征
-    if 'Close' in corr_matrix.columns:
-        close_correlations = corr_matrix['Close']  # 不使用abs()，保留正负号
-        sorted_features = close_correlations.sort_values(ascending=False).index  # 从高到低排序
-        corr_matrix = corr_matrix.loc[sorted_features, sorted_features]
-    
-    # 获取排序后的特征名称和相关性数据
-    features = list(corr_matrix.columns)
-    corr_data = []
-    
-    # 构建热力图数据
-    for i, feature1 in enumerate(features):
-        for j, feature2 in enumerate(features):
-            value = corr_matrix.iloc[i, j]
-            corr_data.append([j, i, float(value)])
-    
-    # 计算特征相关性
-    numeric_cols = df.select_dtypes(include=[np.number]).columns
-    corr_matrix = df[numeric_cols].corr(numeric_only=True)
-    
-    # 保存特征列表到session state
-    st.session_state['feature_list'] = numeric_cols.tolist()
-    
-    # 创建相关性热力图ECharts配置
-    option = {
-        "tooltip": {
-            "position": "top",  # 提示框位置：顶部
-        },
-        "grid": {
-            "top": "0%",       # 上边距
-            "left": "150px",      # 左边距，用于放置较长的特征名称
-            "bottom": "100px"     
-        },
-        "dataset": {
-            "source": corr_data  # 数据源：相关性矩阵数据
-        },
-        "xAxis": {
-            "type": "category",     # 坐标轴类型：类别型
-            "data": features,       # 坐标轴数据：特征名称
-            "splitArea": {
-                "show": True       # 显示分隔区域
-            },
-            "axisLabel": {
-                "rotate": 90       # 标签旋转90度，避免重叠
-            }
-        },
-        "yAxis": {
-            "type": "category",     # 坐标轴类型：类别型
-            "data": features,       # 坐标轴数据：特征名称
-            "splitArea": {
-                "show": True       # 显示分隔区域
-            }
-        },
-        "visualMap": {
-            "min": float(corr_min),  # 使用实际最小值
-            "max": float(corr_max),  # 使用实际最大值
-            "calculable": True,    # 是否显示拖拽手柄
-            "orient": "vertical",  # 垂直布局
-            "left": "0",          # 位置：左侧
-            "bottom": "center",    # 位置：垂直居中
-            "inRange": {
-                "color": ["#195696", "#ffffff", "#ae172a"]  # 颜色范围：蓝-白-红
-            }
-        },
-        "series": [{
-            "name": "相关系数",
-            "type": "heatmap",    # 图表类型：热力图
-            "data": corr_data,    # 数据
-            "label": {
-                "show": True,     # 显示数值标签
-                "formatter": {    # 格式化标签，保留两位小数
-                    "type": "function",
-                    "function": "function(params) { return params.data[2].toFixed(2); }"
-                }
-            },
-            "emphasis": {
-                "itemStyle": {    # 鼠标悬停效果
-                    "shadowBlur": 10,
-                    "shadowColor": "rgba(0, 0, 0, 0.5)"
-                }
-            }
-        }]
-    }
-    
-    return option
+# 移动平均线计算已移至 src/utils/chart_utils.py
 
-# 创建K线图和成交量联动图表
-def create_echarts_kline_volume(df, selected_mas=[]):
-    """
-    创建K线图和成交量联动图表
-    
-    功能:
-    - K线图展示股票价格走势
-    - 成交量柱状图
-    - 支持多个移动平均线叠加显示
-    - 支持图表联动和缩放
-    
-    参数:
-        df (DataFrame): 股票数据
-        selected_mas (list): 选中的移动平均线列表
-        
-    返回:
-        dict: ECharts配置项字典
-    """
-    # 假设数据已经由sort_by_date函数进行了排序，这里不需要再次排序
-    # 转换日期格式
-    dates = df['Date'].dt.strftime('%Y-%m-%d').tolist()
-    
-    # 检查是否具备完整的OHLC数据
-    has_ohlc = all(col in df.columns for col in ['Open', 'High', 'Low', 'Close'])
-    has_volume = 'Volume' in df.columns
-    
-    # 准备K线数据 [开盘价, 收盘价, 最低价, 最高价]
-    if has_ohlc:
-        kline_data = [[round(float(o), 3), round(float(c), 3), round(float(l), 3), round(float(h), 3)] for o, c, l, h in 
-                    zip(df['Open'], df['Close'], df['Low'], df['High'])]
-    else:
-        # 如果缺少OHLC数据，则只显示收盘价
-        close_values = df['Close'].values
-        kline_data = [[float(c), float(c), float(c), float(c)] for c in close_values]
-    
-    # 准备移动平均线数据
-    ma_series = []
-    ma_colors = {
-        'MA5': '#FF4B4B',   # 5日均线：红色
-        'MA10': '#00B4D8',  # 10日均线：蓝色
-        'MA20': '#2ECC71',  # 20日均线：绿色
-        'MA30': '#9B59B6'   # 30日均线：紫色
-    }
-    
-    # 仅当有完整OHLC数据时才计算移动平均线
-    if has_ohlc:
-        df_ma = calculate_ma(df)
-        
-        # 配置每条均线的样式
-        for ma_name in selected_mas:
-            ma_data = df_ma[ma_name].fillna('').tolist()
-            ma_series.append({
-                "name": ma_name,
-                "type": "line",         # 图表类型：线图
-                "xAxisIndex": 0,        # 使用第一个X轴
-                "yAxisIndex": 0,        # 使用第一个Y轴
-                "data": ma_data,
-                "smooth": True,         # 平滑曲线
-                "symbolSize": 3,        # 数据点大小
-                "symbol": "circle",     # 数据点形状
-                "showSymbol": False,    # 默认不显示数据点
-                "lineStyle": {
-                    "width": 2,
-                    "color": ma_colors[ma_name]
-                },
-                "itemStyle": {
-                    "color": ma_colors[ma_name]
-                }
-            })
-    
-    # 计算每日涨跌情况（如果可能）
-    if has_ohlc:
-        df['price_change'] = df['Close'] - df['Open']
-    else:
-        df['price_change'] = df['Close'].diff()
-    
-    # 准备成交量数据，根据涨跌设置颜色
-    volume_data = []
-    if has_volume:
-        for i in range(len(df)):
-            color = "#FF4B4B" if df['price_change'].iloc[i] >= 0 else "#2ECC71"  # 涨：红色，跌：绿色
-            volume_data.append({
-                "value": float(df['Volume'].iloc[i]),
-                "itemStyle": {
-                    "color": color
-                }
-            })
-    
-    # 创建ECharts配置：股票日K线及均线图、成交量图
-    option = {
-        "title": [{
-            "text": "股票日K线及均线图",  # 主标题
-            "left": "center",        # 水平居中
-            "top": "0%"             # 距顶部距离
-        }],
-        "tooltip": {
-            "trigger": "axis",       # 触发类型：坐标轴触发
-            "axisPointer": {
-                "type": "cross"      # 指示器类型：十字准星
-            },
-            "backgroundColor": "rgba(245, 245, 245, 0.8)",
-            "borderWidth": 1,
-            "borderColor": "#ccc",
-            "padding": 10,
-            "textStyle": {
-                "color": "#000",
-            }
-        },
-        "legend": {
-            "data": ["K线", "收盘价"] + selected_mas,  # 图例项
-            "top": "30px"                             # 图例位置
-        },
-        "axisPointer": {
-            "link": {
-                "xAxisIndex": "all"   # 联动所有x轴
-            }
-        },
-        "grid": [{
-            "left": "7%",           # 主图网格
-            "right": "0%",
-            "top": "15%",
-            "height": "50%"          # 主图高度占比
-        }],
-        "xAxis": [{
-            "type": "category",      # 主图X轴
-            "data": dates,
-            "scale": True,
-            "boundaryGap": True,    # 修改为True，允许坐标轴两边留白
-            "axisLine": {"onZero": False},
-            "splitLine": {"show": False},
-            "splitNumber": 20,
-            "min": "dataMin",
-            "max": "dataMax",
-            "axisPointer": {
-                "z": 100
-            }
-        }],
-        "yAxis": [{
-            "scale": True,           # 主图Y轴
-            "splitArea": {
-                "show": True         # 显示分隔区域
-            }
-        }],
-        "dataZoom": [
-            {
-                "type": "inside",    # 内置型数据区域缩放组件
-                "xAxisIndex": [0],    # 控制x轴
-                "start": 10,          # 数据窗口范围的起始百分比
-                "end": 100           # 数据窗口范围的结束百分比
-            },
-            {
-                "show": True,        # 滑动条型数据区域缩放组件
-                "xAxisIndex": [0],
-                "type": "slider",
-                "bottom": "5%",
-                "start": 10,
-                "end": 100
-            }
-        ],
-        "series": [
-            {
-                "name": "K线",
-                "type": "candlestick",  # 图表类型：K线图
-                "xAxisIndex": 0,
-                "yAxisIndex": 0,
-                "data": kline_data,
-                "itemStyle": {
-                    "color": "#FF4B4B",  # 上涨颜色
-                    "color0": "#2ECC71"  # 下跌颜色
-                }
-            },
-            {
-                "name": "收盘价",
-                "type": "line",         # 图表类型：线图
-                "xAxisIndex": 0,
-                "yAxisIndex": 0,
-                "data": df['Close'].round(3).tolist(),  # 先round后tolist
-                "smooth": True,         # 平滑曲线
-                "symbolSize": 3,
-                "symbol": "circle",
-                "showSymbol": False,
-                "lineStyle": {
-                    "width": 1,
-                    "color": "#ff9900"  # 收盘价线颜色
-                },
-                "itemStyle": {
-                    "color": "#ff9900"
-                },
-                "opacity": 0.7
-            }
-        ]
-    }
-    
-    # 添加移动平均线系列
-    option["series"].extend(ma_series)
-    
-    # 只有当存在成交量数据时，才添加成交量图
-    if has_volume:
-        # 添加成交量的标题
-        option["title"].append({
-            "text": "成交量",         # 副标题（成交量）
-            "left": "center",
-            "top": "70%"            # 位于主图下方
-        })
-        
-        # 添加成交量的网格
-        option["grid"].append({
-            "left": "7%",           # 成交量网格
-            "right": "0%",
-            "top": "75%",
-            "height": "15%"          # 成交量图高度占比
-        })
-        
-        # 添加成交量的X轴
-        option["xAxis"].append({
-            "type": "category",      # 成交量X轴
-            "gridIndex": 1,
-            "data": dates,
-            "scale": True,
-            "boundaryGap": True,    # 修改为True，允许坐标轴两边留白
-            "axisLine": {"onZero": False},
-            "splitLine": {"show": False},
-            "axisLabel": {"show": False},
-            "axisTick": {"show": False},
-            "axisPointer": {
-                "label": {"show": False}
-            }
-        })
-        
-        # 添加成交量的Y轴
-        option["yAxis"].append({
-            "scale": True,           # 成交量Y轴
-            "gridIndex": 1,
-            "splitNumber": 2,
-            "axisLabel": {"show": True},
-            "axisLine": {"show": True},
-            "axisTick": {"show": True},
-            "splitLine": {"show": True}
-        })
-        
-        # 更新数据缩放组件以包含成交量
-        for dz in option["dataZoom"]:
-            dz["xAxisIndex"] = [0, 1]
-        
-        # 添加成交量系列
-        option["series"].append({
-            "name": "成交量",
-            "type": "bar",          # 图表类型：柱状图
-            "xAxisIndex": 1,
-            "yAxisIndex": 1,
-            "data": volume_data
-        })
-    
-    return option
+# K线图和成交量图函数已移至 src/utils/chart_utils.py
 
 # 获取侧边栏配置
 data_source = get_state("data_source", "上传数据")
@@ -721,11 +286,12 @@ if df is None:
 
 # 显示数据预览
 st.header("数据预览")
-st.dataframe(df.head(), hide_index=True)
+# 使用安全的数据显示函数
+safe_dataframe_display(df.head(), hide_index=True)
 
 # 显示基本统计信息
 st.header("基本统计信息")
-st.dataframe(df.describe(), hide_index=True)
+safe_dataframe_display(df.describe(), hide_index=True)
 
 # 计算技术指标
 with st.spinner("正在计算技术指标..."):
@@ -746,9 +312,9 @@ selected_indicators = st.multiselect(
 )
 
 if selected_indicators:
-    st.dataframe(tech_indicators[selected_indicators].head(10))
+    safe_dataframe_display(tech_indicators[selected_indicators].head(10))
 else:
-    st.dataframe(tech_indicators.head(10))
+    safe_dataframe_display(tech_indicators.head(10))
 
 # 显示相关性矩阵
 st.header("特征相关性矩阵")
@@ -777,7 +343,7 @@ if selected_corr_indicators:
     corr_df = tech_indicators[selected_corr_indicators]
     
     # 使用streamlit_echarts渲染相关性热力图
-    option = create_correlation_heatmap(corr_df)
+    option = create_correlation_heatmap(corr_df, selected_corr_indicators)
     
     # 添加导出图表功能
     option.update({
@@ -892,10 +458,7 @@ else:
         }
 
         # 选择合适的均线（仅显示可用的均线）
-        available_mas = []
-        for ma in ['MA5', 'MA10', 'MA20', 'MA30']:
-            if ma in tech_indicators.columns:
-                available_mas.append(ma)
+        available_mas = ['MA5', 'MA10', 'MA20', 'MA30']
 
         # 合并导出选项到原有选项
         combined_option = create_echarts_kline_volume(df, available_mas)
@@ -910,7 +473,9 @@ col_raw, col_tech = st.columns(2)
 
 with col_raw:
     if st.button("导出原始数据为CSV"):
-        csv = df.to_csv(index=False)
+        # 修复时间戳数据后导出
+        df_export = fix_datetime_for_arrow(df)
+        csv = df_export.to_csv(index=False)
         st.download_button(
             label="点击下载原始数据",
             data=csv,
@@ -920,7 +485,9 @@ with col_raw:
 
 with col_tech:
     if st.button("导出技术指标数据为CSV"):
-        tech_csv = tech_indicators.to_csv(index=False)
+        # 修复时间戳数据后导出
+        tech_export = fix_datetime_for_arrow(tech_indicators)
+        tech_csv = tech_export.to_csv(index=False)
         st.download_button(
             label="点击下载技术指标数据",
             data=tech_csv,

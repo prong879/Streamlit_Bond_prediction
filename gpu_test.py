@@ -5,7 +5,7 @@ import os
 # 添加src目录到路径，以便能够导入models模块
 sys.path.insert(0, os.path.abspath('src'))
 
-from models.lstm_model import get_device, LSTMModel
+from src.models.lstm_model import get_device, LSTMModel
 
 def test_gpu_support():
     """

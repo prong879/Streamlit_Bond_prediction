@@ -67,10 +67,12 @@ from src.models.lstm_model import (
     create_sequences,
     run_lstm_training,
     select_features,
-    create_correlation_heatmap,
     create_correlation_bar_chart,
     create_significance_charts
 )
+
+# 导入图表工具函数
+from src.utils.chart_utils import create_correlation_heatmap
 
 # 添加session管理函数
 try:
@@ -89,6 +91,213 @@ except ImportError:
 
 # 修复PyTorch与Streamlit的兼容性问题
 torch.classes.__path__ = []
+
+def create_lstm_prediction_chart(dates, actual_values, predictions, title="LSTM预测结果对比"):
+    """
+    创建LSTM预测结果对比图表
+    
+    参数:
+    dates: 日期列表
+    actual_values: 实际值
+    predictions: 预测值
+    title: 图表标题
+    
+    返回:
+    dict: ECharts图表配置
+    """
+    # 确保数据是Python原生类型
+    actual_values = [float(x) for x in actual_values]
+    predictions = [float(x) for x in predictions]
+    
+    option = {
+        "title": {
+            "text": title,
+            "left": "center"
+        },
+        "tooltip": {
+            "trigger": "axis",
+            "axisPointer": {"type": "shadow"}
+        },
+        "legend": {
+            "data": ["实际值", "LSTM预测"],
+            "top": "30px"
+        },
+        "grid": {
+            "left": "3%",
+            "right": "4%",
+            "bottom": "3%",
+            "containLabel": True
+        },
+        "toolbox": {
+            "feature": {
+                "saveAsImage": {}
+            }
+        },
+        "xAxis": {
+            "type": "category",
+            "boundaryGap": False,
+            "data": dates
+        },
+        "yAxis": {
+            "type": "value",
+            "scale": True,
+            "splitLine": {
+                "show": True
+            }
+        },
+        "dataZoom": [
+            {
+                "type": "inside",
+                "start": 0,
+                "end": 100
+            },
+            {
+                "start": 0,
+                "end": 100
+            }
+        ],
+        "series": [
+            {
+                "name": "实际值",
+                "type": "line",
+                "smooth": True,
+                "data": actual_values,
+                "showSymbol": False,
+                "connectNulls": True
+            },
+            {
+                "name": "LSTM预测",
+                "type": "line",
+                "smooth": True,
+                "data": predictions,
+                "showSymbol": False,
+                "connectNulls": True
+            }
+        ]
+    }
+    return option
+
+def create_lstm_scatter_chart(actual_values, predictions, title="LSTM预测散点图"):
+    """
+    创建LSTM预测散点图
+    
+    参数:
+    actual_values: 实际值
+    predictions: 预测值
+    title: 图表标题
+    
+    返回:
+    dict: ECharts图表配置
+    """
+    # 确保数据是Python原生类型
+    actual_values = [float(x) for x in actual_values]
+    predictions = [float(x) for x in predictions]
+    
+    # 计算R²
+    from sklearn.metrics import r2_score
+    r2 = float(r2_score(actual_values, predictions))
+    
+    # 创建对角线数据（完美预测线）
+    min_val = float(min(min(actual_values), min(predictions)))
+    max_val = float(max(max(actual_values), max(predictions)))
+    
+    option = {
+        "title": {
+            "text": f"{title} (R² = {r2:.3f})",
+            "left": "center"
+        },
+        "tooltip": {
+            "trigger": "item",
+            "formatter": "实际值: {data[0]}<br/>预测值: {data[1]}"
+        },
+        "grid": {
+            "left": "3%",
+            "right": "4%",
+            "bottom": "3%",
+            "containLabel": True
+        },
+        "toolbox": {
+            "feature": {
+                "saveAsImage": {}
+            }
+        },
+        "xAxis": {
+            "type": "value",
+            "name": "实际值",
+            "min": min_val,
+            "max": max_val
+        },
+        "yAxis": {
+            "type": "value",
+            "name": "预测值",
+            "min": min_val,
+            "max": max_val
+        },
+        "series": [
+            {
+                "type": "scatter",
+                "data": [[float(actual_values[i]), float(predictions[i])] for i in range(len(actual_values))],
+                "itemStyle": {"color": "#5470c6", "opacity": 0.6},
+                "symbolSize": 6
+            },
+            {
+                "type": "line",
+                "data": [[min_val, min_val], [max_val, max_val]],
+                "lineStyle": {"color": "#ee6666", "type": "dashed"},
+                "symbol": "none",
+                "name": "完美预测线"
+            }
+        ]
+    }
+    return option
+
+def prepare_lstm_charts(actual_values, predictions, dates):
+    """
+    准备LSTM模型的预测结果图表
+    
+    参数:
+    actual_values: 实际值
+    predictions: 预测值
+    dates: 日期列表
+    
+    返回:
+    dict: 包含预测结果图表和散点图的字典
+    """
+    prediction_chart = create_lstm_prediction_chart(dates, actual_values, predictions)
+    scatter_chart = create_lstm_scatter_chart(actual_values, predictions)
+    
+    return {
+        'prediction_chart': prediction_chart,
+        'scatter_chart': scatter_chart
+    }
+
+def fix_datetime_for_arrow(df):
+    """
+    修复DataFrame中的时间戳数据以兼容PyArrow
+    
+    参数:
+        df (DataFrame): 包含时间戳数据的DataFrame
+        
+    返回:
+        DataFrame: 修复后的DataFrame
+    """
+    df_fixed = df.copy()
+    
+    # 检查每一列是否包含时间戳数据
+    for col in df_fixed.columns:
+        if df_fixed[col].dtype == 'datetime64[ns]':
+            # 将纳秒精度的时间戳转换为微秒精度
+            df_fixed[col] = pd.to_datetime(df_fixed[col]).dt.floor('us')
+        elif pd.api.types.is_datetime64_any_dtype(df_fixed[col]):
+            # 处理其他时间戳格式
+            try:
+                df_fixed[col] = pd.to_datetime(df_fixed[col]).dt.floor('us')
+            except Exception as e:
+                st.warning(f"列 {col} 的时间戳转换失败: {e}")
+                # 如果转换失败，将其转换为字符串
+                df_fixed[col] = df_fixed[col].astype(str)
+    
+    return df_fixed
 
 # 页面配置
 st.set_page_config(
@@ -379,30 +588,34 @@ with model_tabs[0]:
                 
                 # 根据显示状态渲染热力图
                 if st.session_state['show_corr_heatmap']:
-                    # 检查high_correlation_features是否为空
-                    if not high_correlation_features:
-                        correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
-                    else:
+                    try:
                         # 显示特征间相关性热力图
                         st.write("特征间相关性热力图")
-                        correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
-                    
-                    # 确保热力图配置是有效的dictionary
-                    if correlation_heatmap_option is None or not isinstance(correlation_heatmap_option, dict):
-                        st.error("生成热力图配置失败")
-                    else:
-                        # 显示热力图
-                        try:
+                        
+                        # 使用统一的热力图函数
+                        if not high_correlation_features:
+                            # 如果没有筛选特征，显示所有特征的热力图
+                            correlation_heatmap_option = create_correlation_heatmap(corr_matrix)
+                        else:
+                            # 显示筛选后特征的热力图
+                            correlation_heatmap_option = create_correlation_heatmap(corr_matrix, high_correlation_features)
+                        
+                        # 确保热力图配置是有效的dictionary
+                        if correlation_heatmap_option is None or not isinstance(correlation_heatmap_option, dict):
+                            st.error("生成热力图配置失败")
+                        else:
+                            # 显示热力图
                             st_echarts(
                                 options=correlation_heatmap_option,
-                                height="300px",
+                                height="400px",
                                 width="100%",
                                 key="corr_heatmap"
                             )
-                        except Exception as e:
-                            st.error(f"热力图渲染出错: {str(e)}")
-                            st.write("错误详情:")
-                            st.exception(e)
+                    except Exception as e:
+                        st.error(f"热力图渲染出错: {str(e)}")
+                        st.code(f"错误详情: {str(e)}")
+                        import traceback
+                        st.code(traceback.format_exc())
                 
         
         # 2. VIF筛选展开框
@@ -600,6 +813,11 @@ with model_tabs[0]:
                 else:
                     st.info("没有可显示的训练历史数据")
     
+    # 添加LSTM训练结果显示区域的占位符
+    lstm_metrics_placeholder = st.empty()
+    lstm_prediction_chart_placeholder = st.empty()
+    lstm_scatter_chart_placeholder = st.empty()
+    
     if 'start_training' in st.session_state and st.session_state['start_training']:
         # 显示训练进度
         with progress_placeholder.container():
@@ -615,6 +833,245 @@ with model_tabs[0]:
                 columns=['训练损失', '验证损失']
             )
             st.line_chart(chart_data)
+    
+    # 显示LSTM训练结果
+    if 'lstm_training_complete' in st.session_state and st.session_state['lstm_training_complete']:
+        st.success("LSTM模型训练完成")
+        
+        # 显示评估指标
+        if 'model_metrics' in st.session_state and st.session_state['model_metrics']:
+            metrics = st.session_state['model_metrics']
+            
+            with lstm_metrics_placeholder.container():
+                st.subheader("LSTM模型评估指标")
+                metric_cols = st.columns(4)
+                with metric_cols[0]:
+                    st.metric("MSE", f"{metrics.get('MSE', 0):.4f}")
+                with metric_cols[1]:
+                    st.metric("RMSE", f"{metrics.get('RMSE', 0):.4f}")
+                with metric_cols[2]:
+                    st.metric("MAE", f"{metrics.get('MAE', 0):.4f}")
+                with metric_cols[3]:
+                    st.metric("方向准确率", f"{metrics.get('Direction_Accuracy', 0):.4f}")
+        
+        # 显示预测结果图表
+        if ('lstm_test_predictions' in st.session_state and 
+            'y_test' in st.session_state and 
+            'raw_data' in st.session_state):
+            
+            try:
+                # 获取预测数据和真实数据
+                lstm_pred = st.session_state['lstm_test_predictions']
+                
+                # 关键修复：使用与ARIMA完全一致的数据划分方式获取实际值
+                df = st.session_state['raw_data']
+                train_test_ratio = st.session_state.get('train_test_ratio', 0.8)
+                
+                # 获取目标列（通常是Close）
+                target_column = 'Close'  # 默认使用Close列
+                if 'selected_features' in st.session_state:
+                    selected_features = st.session_state['selected_features']
+                    # 如果Close在选择的特征中，使用它；否则使用第一个特征
+                    if 'Close' in selected_features:
+                        target_column = 'Close'
+                    elif selected_features:
+                        target_column = selected_features[0]
+                
+                # 使用与ARIMA完全一致的数据划分方式
+                train_size = int(len(df) * train_test_ratio)
+                test_actual_values = df[target_column].iloc[train_size:].values
+                
+                # 确保预测数据格式正确
+                if hasattr(lstm_pred, 'flatten'):
+                    lstm_pred = lstm_pred.flatten()
+                else:
+                    lstm_pred = np.array(lstm_pred).flatten()
+                
+                # 现在LSTM测试集应该与ARIMA测试集大小一致
+                # 但由于序列创建，LSTM预测数量可能仍然少于原始测试集
+                if len(lstm_pred) < len(test_actual_values):
+                    # 截取对应长度的实际值，从测试集末尾开始
+                    # 这样确保使用的是最新的数据点
+                    test_actual_values = test_actual_values[-len(lstm_pred):]
+                    st.info(f"📊 LSTM预测{len(lstm_pred)}个点，使用测试集最后{len(lstm_pred)}个实际值进行对比")
+                elif len(lstm_pred) > len(test_actual_values):
+                    # 如果LSTM预测点数多于实际值，截取LSTM预测
+                    lstm_pred = lstm_pred[:len(test_actual_values)]
+                    st.info(f"📊 截取LSTM预测到{len(test_actual_values)}个点以匹配测试集大小")
+                else:
+                    st.info(f"📊 LSTM预测与测试集大小完全一致：{len(lstm_pred)}个数据点")
+                
+                # 生成日期序列
+                if 'Date' in df.columns:
+                    # 获取对应测试集的日期，使用与实际值对应的日期
+                    test_start_idx = train_size + (len(test_actual_values) - len(lstm_pred)) if len(lstm_pred) < len(test_actual_values) else train_size
+                    test_dates = df['Date'].iloc[test_start_idx:test_start_idx+len(lstm_pred)].dt.strftime('%Y-%m-%d').tolist()
+                    dates = test_dates
+                else:
+                    dates = [f"Day {i}" for i in range(len(lstm_pred))]
+                
+                # 添加调试信息展开框
+                with st.expander("🔧 LSTM数据处理信息", expanded=False):
+                    st.markdown("**数据来源:**")
+                    st.success(f"✅ 实际值: 使用原始数据中的{target_column}列")
+                    st.success(f"✅ 预测值: 使用训练后的LSTM模型预测结果")
+                    
+                    st.markdown("**数据统计:**")
+                    st.write(f"- 原始数据总长度: {len(df)} 个数据点")
+                    st.write(f"- 训练集大小: {train_size} 个数据点")
+                    st.write(f"- 测试集大小: {len(df) - train_size} 个数据点")
+                    st.write(f"- LSTM预测数量: {len(lstm_pred)} 个数据点")
+                    st.write(f"- 实际值范围: {test_actual_values.min():.2f} - {test_actual_values.max():.2f}")
+                    st.write(f"- 预测值范围: {lstm_pred.min():.2f} - {lstm_pred.max():.2f}")
+                    st.write(f"- 日期范围: {dates[0]} 到 {dates[-1]}")
+                    
+                    st.markdown("**数据处理:**")
+                    st.success("✅ 使用与ARIMA完全一致的数据划分方式")
+                    st.success("✅ 预测值已进行反归一化处理")
+                
+                # 使用统一的图表创建函数生成图表配置
+                charts = prepare_lstm_charts(test_actual_values, lstm_pred, dates)
+                
+                # 保存图表配置到session state（与ARIMA保持一致）
+                st.session_state['lstm_prediction_chart'] = charts['prediction_chart']
+                st.session_state['lstm_scatter_chart'] = charts['scatter_chart']
+                
+                # 显示预测对比图表
+                with lstm_prediction_chart_placeholder.container():
+                    st.subheader("LSTM预测结果对比")
+                    st_echarts(options=st.session_state['lstm_prediction_chart'], height="500px")
+                
+                # 显示散点图
+                with lstm_scatter_chart_placeholder.container():
+                    st.subheader("LSTM预测散点图")
+                    st_echarts(options=st.session_state['lstm_scatter_chart'], height="400px")
+                
+                # 添加误差分析图表
+                st.subheader("LSTM误差分析")
+                error_col1, error_col2 = st.columns(2)
+                
+                with error_col1:
+                    # 误差时间序列图
+                    errors = test_actual_values - lstm_pred
+                    
+                    error_time_option = {
+                        "title": {
+                            "text": "预测误差时间序列",
+                            "left": "center",
+                            "textStyle": {"fontSize": 14}
+                        },
+                        "tooltip": {"trigger": "axis"},
+                        "xAxis": {
+                            "type": "category",
+                            "data": dates,
+                            "axisLabel": {"rotate": 45}
+                        },
+                        "yAxis": {
+                            "type": "value",
+                            "name": "误差"
+                        },
+                        "series": [{
+                            "type": "line",
+                            "data": [float(x) for x in errors],
+                            "lineStyle": {"color": "#ee6666", "width": 1},
+                            "symbol": "none"
+                        }],
+                        "dataZoom": [{
+                            "type": "slider",
+                            "start": 0,
+                            "end": 100
+                        }]
+                    }
+                    
+                    st_echarts(options=error_time_option, height="300px")
+                
+                with error_col2:
+                    # 误差分布直方图
+                    hist, bin_edges = np.histogram(errors, bins=20)
+                    bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+                    
+                    error_hist_option = {
+                        "title": {
+                            "text": "预测误差分布",
+                            "left": "center",
+                            "textStyle": {"fontSize": 14}
+                        },
+                        "tooltip": {"trigger": "axis"},
+                        "xAxis": {
+                            "type": "category",
+                            "data": [f"{float(x):.3f}" for x in bin_centers],
+                            "name": "误差值"
+                        },
+                        "yAxis": {
+                            "type": "value",
+                            "name": "频次"
+                        },
+                        "series": [{
+                            "type": "bar",
+                            "data": [int(x) for x in hist],
+                            "itemStyle": {"color": "#73c0de"}
+                        }]
+                    }
+                    
+                    st_echarts(options=error_hist_option, height="300px")
+                
+                # 添加详细的性能统计信息
+                st.subheader("LSTM详细性能统计")
+                stats_col1, stats_col2, stats_col3 = st.columns(3)
+                
+                with stats_col1:
+                    st.metric("平均误差", f"{np.mean(errors):.4f}")
+                    st.metric("误差标准差", f"{np.std(errors):.4f}")
+                
+                with stats_col2:
+                    st.metric("最大正误差", f"{np.max(errors):.4f}")
+                    st.metric("最大负误差", f"{np.min(errors):.4f}")
+                
+                with stats_col3:
+                    # 计算MAPE
+                    mape = np.mean(np.abs((test_actual_values - lstm_pred) / test_actual_values)) * 100
+                    st.metric("MAPE (%)", f"{mape:.2f}")
+                    
+                    # 计算方向准确率
+                    if len(test_actual_values) > 1:
+                        actual_direction = np.sign(test_actual_values[1:] - test_actual_values[:-1])
+                        pred_direction = np.sign(lstm_pred[1:] - lstm_pred[:-1])
+                        direction_accuracy = np.mean(actual_direction == pred_direction) * 100
+                        st.metric("方向准确率 (%)", f"{direction_accuracy:.2f}")
+                
+                # 添加模型信息展开框
+                with st.expander("LSTM模型详细信息", expanded=False):
+                    if 'model_params' in st.session_state and st.session_state['model_params']:
+                        model_params = st.session_state['model_params']
+                        st.markdown("**模型参数:**")
+                        for key, value in model_params.items():
+                            st.write(f"- {key}: {value}")
+                    
+                    if 'training_params' in st.session_state and st.session_state['training_params']:
+                        training_params = st.session_state['training_params']
+                        st.markdown("**训练参数:**")
+                        for key, value in training_params.items():
+                            st.write(f"- {key}: {value}")
+                    
+                    if 'selected_features' in st.session_state:
+                        selected_features = st.session_state['selected_features']
+                        st.markdown("**使用的特征:**")
+                        st.write(", ".join(selected_features))
+                    
+                    # 显示训练历史摘要
+                    if 'training_history' in st.session_state:
+                        history = st.session_state['training_history']
+                        if isinstance(history, dict) and 'train_loss' in history:
+                            st.markdown("**训练历史摘要:**")
+                            st.write(f"- 训练轮数: {len(history['train_loss'])}")
+                            st.write(f"- 最终训练损失: {history['train_loss'][-1]:.6f}")
+                            if 'val_loss' in history:
+                                st.write(f"- 最终验证损失: {history['val_loss'][-1]:.6f}")
+                    
+            except Exception as e:
+                st.error(f"显示LSTM预测图表时出错: {e}")
+                import traceback
+                st.code(traceback.format_exc())
 
 # ARIMA参数设置
 with model_tabs[1]:       
@@ -1305,7 +1762,8 @@ with model_tabs[1]:
                     # 保存训练结果和模型到session state
                     st.session_state['arima_model'] = arima_model
                     st.session_state['arima_model_metrics'] = metrics
-                    st.session_state['model_metrics'] = metrics
+                    # 不要覆盖通用的model_metrics，这是LSTM专用的
+                    # st.session_state['model_metrics'] = metrics
                     st.session_state['arima_training_result'] = arima_training_result
                     
                     # 如果是多次训练，保存最优运行信息
@@ -1318,7 +1776,8 @@ with model_tabs[1]:
                     
                     # 更新训练状态
                     st.session_state['arima_training_complete'] = True
-                    st.session_state['training_complete'] = True
+                    # 不要设置通用的training_complete，这会影响LSTM检测
+                    # st.session_state['training_complete'] = True
                     
                     # 重置训练状态标志
                     st.session_state['arima_start_training'] = False
@@ -1573,6 +2032,30 @@ if 'start_training' in st.session_state and st.session_state['start_training']:
     st.session_state['X_test'] = training_result['X_test']
     st.session_state['y_test'] = training_result['y_test']
     st.session_state['seq_length'] = training_result['sequence_length']
+    
+    # 保存LSTM预测结果以供模型评估页面使用
+    if 'test_predictions' in training_result and training_result['test_predictions'] is not None:
+        st.session_state['lstm_test_predictions'] = training_result['test_predictions']
+    elif 'X_test' in training_result and 'y_test' in training_result:
+        # 如果没有预测结果，使用模型生成预测
+        try:
+            model = training_result['model']
+            X_test = training_result['X_test']
+            target_scaler = training_result.get('target_scaler')
+            
+            model.eval()
+            with torch.no_grad():
+                X_test_tensor = torch.FloatTensor(X_test)
+                predictions = model(X_test_tensor)
+                lstm_pred = predictions.detach().cpu().numpy().flatten()
+                
+                # 如果有target_scaler，进行反归一化
+                if target_scaler is not None:
+                    lstm_pred = target_scaler.inverse_transform(lstm_pred.reshape(-1, 1)).flatten()
+                
+                st.session_state['lstm_test_predictions'] = lstm_pred
+        except Exception as e:
+            st.warning(f"生成LSTM预测结果时出错: {e}")
     
     # 更新训练状态
     st.session_state['training_complete'] = True

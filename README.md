@@ -1,5 +1,9 @@
 # 基于Streamlit的LSTM+ARIMA多模型时序预测系统
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/prong879/Streamlit_Bond_prediction)
+
+
+
 ## 项目概述
 本项目是一个基于Streamlit框架开发的时序预测Web应用，提供了直观的图形界面来执行时序预测的完整流程，包括数据加载、特征工程、模型训练和结果分析等。本系统采取模块化设计，可后期引入更多模型，实现多模型预测对比。可用于股票预测等典型场景。
 

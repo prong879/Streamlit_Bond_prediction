@@ -48,3 +48,8 @@ pip-delete-this-directory.txt
 .settings/
 *.sublime-workspace
 *.sublime-project
+
+
+pytorch_wheels/
+models/*.json
+models/*.pth
