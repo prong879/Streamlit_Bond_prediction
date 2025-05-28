@@ -50,14 +50,23 @@ except ImportError:
         st.session_state[key] = value
 
 # 导入ARIMA模型的图表函数
+arima_import_success = False
 try:
+    # 添加项目根目录到路径
+    import sys
+    from pathlib import Path
+    project_root = str(Path(__file__).parent.parent)
+    if project_root not in sys.path:
+        sys.path.insert(0, project_root)
+    
     from src.models.arima_model import (
         create_timeseries_chart,
         create_histogram_chart,
         prepare_arima_charts
     )
+    arima_import_success = True
 except ImportError as e:
-    st.warning(f"无法导入ARIMA图表函数: {e}")
+    arima_import_error = str(e)
     # 创建占位函数
     def create_timeseries_chart(*args, **kwargs):
         return {"title": {"text": "图表函数未导入"}}
@@ -65,6 +74,97 @@ except ImportError as e:
         return {"title": {"text": "图表函数未导入"}}
     def prepare_arima_charts(*args, **kwargs):
         return {"residuals_chart": None, "residuals_hist": None}
+    
+    # 创建备用的图表函数，使用与模型训练页面相同的实现
+    def create_timeseries_chart_backup(data, title='时间序列图'):
+        """备用时间序列图表函数"""
+        if isinstance(data, pd.DataFrame):
+            # 如果是DataFrame，取第一列数据
+            series_data = data.iloc[:, 0].values
+            dates = data.index.tolist() if hasattr(data.index, 'tolist') else list(range(len(series_data)))
+        else:
+            # 如果是Series或数组
+            series_data = data if hasattr(data, '__iter__') else [data]
+            dates = list(range(len(series_data)))
+        
+        option = {
+            "title": {
+                "text": title,
+                "left": "center",
+                "textStyle": {"fontSize": 14}
+            },
+            "tooltip": {"trigger": "axis"},
+            "xAxis": {
+                "type": "category",
+                "data": [str(d) for d in dates],
+                "axisLabel": {"rotate": 45}
+            },
+            "yAxis": {
+                "type": "value"
+            },
+            "series": [{
+                "type": "line",
+                "data": [float(x) for x in series_data],
+                "lineStyle": {"color": "#5470c6", "width": 2},
+                "symbol": "none"
+            }],
+            "dataZoom": [{
+                "type": "slider",
+                "start": 0,
+                "end": 100
+            }]
+        }
+        return option
+    
+    def create_histogram_chart_backup(data, title='分布直方图', bins=30):
+        """备用直方图函数"""
+        if hasattr(data, 'values'):
+            data = data.values
+        if hasattr(data, 'flatten'):
+            data = data.flatten()
+        
+        # 过滤NaN值
+        clean_data = [float(x) for x in data if not pd.isna(x) and not np.isnan(float(x))]
+        
+        if not clean_data:
+            return {
+                "title": {"text": f"{title} - 无有效数据", "left": "center"},
+                "xAxis": {"type": "category", "data": []},
+                "yAxis": {"type": "value"},
+                "series": [{"type": "bar", "data": []}]
+            }
+        
+        hist, bin_edges = np.histogram(clean_data, bins=bins)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        option = {
+            "title": {
+                "text": title,
+                "left": "center",
+                "textStyle": {"fontSize": 14}
+            },
+            "tooltip": {"trigger": "axis"},
+            "xAxis": {
+                "type": "category",
+                "data": [f"{float(x):.3f}" for x in bin_centers],
+                "name": "值"
+            },
+            "yAxis": {
+                "type": "value",
+                "name": "频次"
+            },
+            "series": [{
+                "type": "bar",
+                "data": [int(x) for x in hist],
+                "itemStyle": {"color": "#73c0de"}
+            }]
+        }
+        return option
+    
+    # 如果ARIMA函数导入失败，使用备用函数
+    if not arima_import_success:
+        create_timeseries_chart = create_timeseries_chart_backup
+        create_histogram_chart = create_histogram_chart_backup
 
 def fix_datetime_for_arrow(df):
     """
@@ -107,6 +207,13 @@ st.set_page_config(
 # 页面标题和简介
 st.title("📈 模型评估")
 st.markdown("对训练完成的模型进行详细性能分析和对比评估")
+
+# 显示ARIMA图表函数导入状态
+if arima_import_success:
+    st.success("✅ ARIMA图表函数导入成功")
+else:
+    st.error(f"❌ 无法导入ARIMA图表函数: {arima_import_error}")
+    st.warning("误差分析图表可能无法正常显示，请检查ARIMA模型文件")
 
 def check_model_availability():
     """检查可用的训练模型"""
@@ -961,8 +1068,8 @@ with st.sidebar:
 eval_tabs = st.tabs([
     "📊 模型对比", 
     "📈 预测分析", 
-    "🔍 误差分析", 
-    "🧪 模型诊断", 
+    # "🔍 误差分析",  # 暂时隐藏
+    # "🧪 模型诊断",  # 暂时隐藏
     "📋 详细报告"
 ])
 
@@ -1261,552 +1368,338 @@ with eval_tabs[1]:
         else:
             st.warning("没有可用的数据进行预测分析")
 
-# 标签页3: 误差分析
-with eval_tabs[2]:
-    st.header("🔍 误差分析")
+# 添加JSON序列化辅助函数
+def make_json_serializable(obj):
+    """
+    将包含numpy数组的对象转换为JSON可序列化的格式
     
-    if len(selected_models) == 0:
-        st.warning("请在侧边栏选择至少一个模型进行分析")
-    else:
-        # 获取真实的预测数据和实际值
-        actual_values, lstm_pred, arima_pred, dates, has_real_data = get_prediction_data()
+    参数:
+        obj: 需要转换的对象
         
-        if has_real_data and len(actual_values) > 0:
-            # 为每个模型单独获取对应的实际值和预测值
-            def get_model_specific_data(model_name, pred_values, base_actual_values, base_dates):
-                """为特定模型获取对应长度的实际值和日期"""
-                if pred_values is None or len(pred_values) == 0:
-                    return None, None, None
-                
-                pred_length = len(pred_values)
-                actual_length = len(base_actual_values)
-                
-                if pred_length <= actual_length:
-                    # 如果预测长度小于等于实际值长度，使用最后pred_length个实际值
-                    model_actual = base_actual_values[-pred_length:]
-                    model_dates = base_dates[-pred_length:] if len(base_dates) >= pred_length else base_dates
-                else:
-                    # 如果预测长度大于实际值长度，截取预测值
-                    pred_values = pred_values[:actual_length]
-                    model_actual = base_actual_values
-                    model_dates = base_dates
-                
-                return model_actual, pred_values, model_dates
-            
-            # 残差分析 - 移除show_residuals条件，始终显示
-            st.subheader("残差分析")
-            
-            if len(selected_models) == 1:
-                # 单模型时使用全宽度
-                model = selected_models[0]
-                try:
-                    if model == "LSTM" and lstm_pred is not None and len(lstm_pred) > 0:
-                        # 获取LSTM对应的实际值和预测值
-                        lstm_actual, lstm_pred_aligned, lstm_dates = get_model_specific_data(
-                            "LSTM", lstm_pred, actual_values, dates
-                        )
-                        
-                        if lstm_actual is not None and lstm_pred_aligned is not None:
-                            # 计算LSTM残差
-                            lstm_residuals = np.array(lstm_actual) - np.array(lstm_pred_aligned)
-                            
-                            # 创建两列布局：图表和统计信息
-                            residual_chart_col, residual_stats_col = st.columns([2, 1])
-                            
-                            with residual_chart_col:
-                                # 使用ARIMA模型的图表函数创建残差图
-                                residuals_df = pd.DataFrame({'残差': lstm_residuals}, index=lstm_dates)
-                                residual_option = create_timeseries_chart(
-                                    residuals_df,
-                                    title='LSTM模型残差分析'
-                                )
-                                st_echarts(options=residual_option, height="350px")
-                            
-                            with residual_stats_col:
-                                st.markdown(f"**LSTM残差统计:**")
-                                st.metric("数据点数", len(lstm_residuals))
-                                st.metric("平均残差", f"{np.mean(lstm_residuals):.4f}")
-                                st.metric("残差标准差", f"{np.std(lstm_residuals):.4f}")
-                                st.metric("最大绝对残差", f"{np.max(np.abs(lstm_residuals)):.4f}")
-                        else:
-                            st.warning("LSTM数据对齐失败")
-                        
-                    elif model == "ARIMA" and arima_pred is not None and len(arima_pred) > 0:
-                        # 获取ARIMA对应的实际值和预测值
-                        arima_actual, arima_pred_aligned, arima_dates = get_model_specific_data(
-                            "ARIMA", arima_pred, actual_values, dates
-                        )
-                        
-                        if arima_actual is not None and arima_pred_aligned is not None:
-                            # 计算ARIMA残差
-                            arima_residuals = np.array(arima_actual) - np.array(arima_pred_aligned)
-                            
-                            # 创建两列布局：图表和统计信息
-                            residual_chart_col, residual_stats_col = st.columns([2, 1])
-                            
-                            with residual_chart_col:
-                                # 使用ARIMA模型的图表函数创建残差图
-                                residuals_df = pd.DataFrame({'残差': arima_residuals}, index=arima_dates)
-                                residual_option = create_timeseries_chart(
-                                    residuals_df,
-                                    title='ARIMA模型残差分析'
-                                )
-                                st_echarts(options=residual_option, height="350px")
-                            
-                            with residual_stats_col:
-                                st.markdown(f"**ARIMA残差统计:**")
-                                st.metric("数据点数", len(arima_residuals))
-                                st.metric("平均残差", f"{np.mean(arima_residuals):.4f}")
-                                st.metric("残差标准差", f"{np.std(arima_residuals):.4f}")
-                                st.metric("最大绝对残差", f"{np.max(np.abs(arima_residuals)):.4f}")
-                        else:
-                            st.warning("ARIMA数据对齐失败")
-                    else:
-                        st.warning(f"{model}模型没有可用的预测数据")
-                except Exception as e:
-                    st.error(f"{model}残差分析失败: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-            else:
-                # 多模型时使用列布局
-                residual_cols = st.columns(len(selected_models))
-                
-                for i, model in enumerate(selected_models):
-                    with residual_cols[i]:
-                        try:
-                            if model == "LSTM" and lstm_pred is not None and len(lstm_pred) > 0:
-                                # 获取LSTM对应的实际值和预测值
-                                lstm_actual, lstm_pred_aligned, lstm_dates = get_model_specific_data(
-                                    "LSTM", lstm_pred, actual_values, dates
-                                )
-                                
-                                if lstm_actual is not None and lstm_pred_aligned is not None:
-                                    # 计算LSTM残差
-                                    lstm_residuals = np.array(lstm_actual) - np.array(lstm_pred_aligned)
-                                    # 使用ARIMA模型的图表函数创建残差图
-                                    residuals_df = pd.DataFrame({'残差': lstm_residuals}, index=lstm_dates)
-                                    residual_option = create_timeseries_chart(
-                                        residuals_df,
-                                        title='LSTM残差分析'
-                                    )
-                                    st_echarts(options=residual_option, height="300px")
-                                    
-                                    # 显示残差统计
-                                    st.markdown(f"**LSTM残差统计:**")
-                                    st.write(f"- 数据点数: {len(lstm_residuals)}")
-                                    st.write(f"- 平均残差: {np.mean(lstm_residuals):.4f}")
-                                    st.write(f"- 残差标准差: {np.std(lstm_residuals):.4f}")
-                                else:
-                                    st.warning("LSTM数据对齐失败")
-                                
-                            elif model == "ARIMA" and arima_pred is not None and len(arima_pred) > 0:
-                                # 获取ARIMA对应的实际值和预测值
-                                arima_actual, arima_pred_aligned, arima_dates = get_model_specific_data(
-                                    "ARIMA", arima_pred, actual_values, dates
-                                )
-                                
-                                if arima_actual is not None and arima_pred_aligned is not None:
-                                    # 计算ARIMA残差
-                                    arima_residuals = np.array(arima_actual) - np.array(arima_pred_aligned)
-                                    # 使用ARIMA模型的图表函数创建残差图
-                                    residuals_df = pd.DataFrame({'残差': arima_residuals}, index=arima_dates)
-                                    residual_option = create_timeseries_chart(
-                                        residuals_df,
-                                        title='ARIMA残差分析'
-                                    )
-                                    st_echarts(options=residual_option, height="300px")
-                                    
-                                    # 显示残差统计
-                                    st.markdown(f"**ARIMA残差统计:**")
-                                    st.write(f"- 数据点数: {len(arima_residuals)}")
-                                    st.write(f"- 平均残差: {np.mean(arima_residuals):.4f}")
-                                    st.write(f"- 残差标准差: {np.std(arima_residuals):.4f}")
-                                else:
-                                    st.warning("ARIMA数据对齐失败")
-                            else:
-                                st.warning(f"{model}模型没有可用的预测数据")
-                        except Exception as e:
-                            st.error(f"{model}残差分析失败: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
-            
-            # 误差分布分析
-            st.subheader("误差分布分析")
-            
-            if len(selected_models) == 1:
-                # 单模型时使用全宽度
-                model = selected_models[0]
-                try:
-                    if model == "LSTM" and lstm_pred is not None and len(lstm_pred) > 0:
-                        # 获取LSTM对应的实际值和预测值
-                        lstm_actual, lstm_pred_aligned, _ = get_model_specific_data(
-                            "LSTM", lstm_pred, actual_values, dates
-                        )
-                        
-                        if lstm_actual is not None and lstm_pred_aligned is not None:
-                            # 计算LSTM误差
-                            lstm_errors = np.array(lstm_actual) - np.array(lstm_pred_aligned)
-                            # 使用ARIMA模型的图表函数创建误差分布图
-                            error_dist_option = create_histogram_chart(
-                                lstm_errors,
-                                title='LSTM误差分布'
-                            )
-                            st_echarts(options=error_dist_option, height="350px")
-                        else:
-                            st.warning("LSTM数据对齐失败")
-                        
-                    elif model == "ARIMA" and arima_pred is not None and len(arima_pred) > 0:
-                        # 获取ARIMA对应的实际值和预测值
-                        arima_actual, arima_pred_aligned, _ = get_model_specific_data(
-                            "ARIMA", arima_pred, actual_values, dates
-                        )
-                        
-                        if arima_actual is not None and arima_pred_aligned is not None:
-                            # 计算ARIMA误差
-                            arima_errors = np.array(arima_actual) - np.array(arima_pred_aligned)
-                            # 使用ARIMA模型的图表函数创建误差分布图
-                            error_dist_option = create_histogram_chart(
-                                arima_errors,
-                                title='ARIMA误差分布'
-                            )
-                            st_echarts(options=error_dist_option, height="350px")
-                        else:
-                            st.warning("ARIMA数据对齐失败")
-                    else:
-                        st.warning(f"{model}模型没有可用的预测数据")
-                except Exception as e:
-                    st.error(f"{model}误差分布分析失败: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
-            else:
-                # 多模型时使用列布局
-                error_cols = st.columns(len(selected_models))
-                
-                for i, model in enumerate(selected_models):
-                    with error_cols[i]:
-                        try:
-                            if model == "LSTM" and lstm_pred is not None and len(lstm_pred) > 0:
-                                # 获取LSTM对应的实际值和预测值
-                                lstm_actual, lstm_pred_aligned, _ = get_model_specific_data(
-                                    "LSTM", lstm_pred, actual_values, dates
-                                )
-                                
-                                if lstm_actual is not None and lstm_pred_aligned is not None:
-                                    # 计算LSTM误差
-                                    lstm_errors = np.array(lstm_actual) - np.array(lstm_pred_aligned)
-                                    # 使用ARIMA模型的图表函数创建误差分布图
-                                    error_dist_option = create_histogram_chart(
-                                        lstm_errors,
-                                        title='LSTM误差分布'
-                                    )
-                                    st_echarts(options=error_dist_option, height="300px")
-                                else:
-                                    st.warning("LSTM数据对齐失败")
-                                
-                            elif model == "ARIMA" and arima_pred is not None and len(arima_pred) > 0:
-                                # 获取ARIMA对应的实际值和预测值
-                                arima_actual, arima_pred_aligned, _ = get_model_specific_data(
-                                    "ARIMA", arima_pred, actual_values, dates
-                                )
-                                
-                                if arima_actual is not None and arima_pred_aligned is not None:
-                                    # 计算ARIMA误差
-                                    arima_errors = np.array(arima_actual) - np.array(arima_pred_aligned)
-                                    # 使用ARIMA模型的图表函数创建误差分布图
-                                    error_dist_option = create_histogram_chart(
-                                        arima_errors,
-                                        title='ARIMA误差分布'
-                                    )
-                                    st_echarts(options=error_dist_option, height="300px")
-                                else:
-                                    st.warning("ARIMA数据对齐失败")
-                            else:
-                                st.warning(f"{model}模型没有可用的预测数据")
-                        except Exception as e:
-                            st.error(f"{model}误差分布分析失败: {e}")
-                            import traceback
-                            st.code(traceback.format_exc())
-            
-            # 误差统计表
-            st.subheader("误差统计摘要")
-            
-            error_stats_data = []
+    返回:
+        JSON可序列化的对象
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: make_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [make_json_serializable(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(make_json_serializable(item) for item in obj)
+    elif pd.isna(obj):
+        return None
+    else:
+        return obj
+
+def generate_evaluation_report(report_sections, report_format, selected_models, selected_metrics, model_info, best_model, evaluation_period, include_charts=True):
+    """
+    生成模型评估报告
+    
+    参数:
+        report_sections: 选择的报告章节
+        report_format: 报告格式 (HTML, Markdown, JSON)
+        selected_models: 选择的模型列表
+        selected_metrics: 选择的指标列表
+        model_info: 模型信息字典
+        best_model: 最佳模型名称
+        evaluation_period: 评估期间
+        include_charts: 是否包含图表
+        
+    返回:
+        tuple: (报告内容, 文件扩展名, MIME类型)
+    """
+    current_time = datetime.now().strftime('%Y年%m月%d日 %H:%M')
+    
+    if report_format == "HTML预览":
+        # 生成HTML格式报告
+        html_content = f"""
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模型评估报告</title>
+    <style>
+        body {{ font-family: 'Microsoft YaHei', Arial, sans-serif; margin: 40px; line-height: 1.6; }}
+        .header {{ text-align: center; border-bottom: 2px solid #333; padding-bottom: 20px; margin-bottom: 30px; }}
+        .section {{ margin-bottom: 30px; }}
+        .metrics-table {{ border-collapse: collapse; width: 100%; margin: 20px 0; }}
+        .metrics-table th, .metrics-table td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+        .metrics-table th {{ background-color: #f2f2f2; font-weight: bold; }}
+        .highlight {{ background-color: #e8f4fd; padding: 15px; border-left: 4px solid #2196F3; margin: 15px 0; }}
+        .warning {{ background-color: #fff3cd; padding: 15px; border-left: 4px solid #ffc107; margin: 15px 0; }}
+        .success {{ background-color: #d4edda; padding: 15px; border-left: 4px solid #28a745; margin: 15px 0; }}
+        h1 {{ color: #333; }}
+        h2 {{ color: #555; border-bottom: 1px solid #eee; padding-bottom: 10px; }}
+        h3 {{ color: #666; }}
+        .footer {{ text-align: center; margin-top: 50px; padding-top: 20px; border-top: 1px solid #eee; color: #666; font-size: 0.9em; }}
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>📊 模型评估报告</h1>
+        <p><strong>生成时间:</strong> {current_time}</p>
+        <p><strong>评估模型:</strong> {', '.join(selected_models)}</p>
+        <p><strong>评估期间:</strong> {evaluation_period}</p>
+    </div>
+"""
+        
+        # 执行摘要
+        if "执行摘要" in report_sections:
+            html_content += f"""
+    <div class="section">
+        <h2>📋 执行摘要</h2>
+        <div class="highlight">
+            <h3>🎯 主要发现</h3>
+"""
             for model in selected_models:
-                try:
-                    if model == "LSTM" and lstm_pred is not None and len(lstm_pred) > 0:
-                        # 获取LSTM对应的实际值和预测值
-                        lstm_actual, lstm_pred_aligned, _ = get_model_specific_data(
-                            "LSTM", lstm_pred, actual_values, dates
-                        )
-                        
-                        if lstm_actual is not None and lstm_pred_aligned is not None:
-                            errors = np.array(lstm_actual) - np.array(lstm_pred_aligned)
-                            stats_row = {
-                                "模型": "LSTM",
-                                "数据点数": len(errors),
-                                "平均误差": f"{np.mean(errors):.4f}",
-                                "误差标准差": f"{np.std(errors):.4f}",
-                                "最大误差": f"{np.max(np.abs(errors)):.4f}",
-                                "误差偏度": f"{stats.skew(errors):.4f}",
-                                "误差峰度": f"{stats.kurtosis(errors):.4f}"
-                            }
-                            error_stats_data.append(stats_row)
-                        
-                    elif model == "ARIMA" and arima_pred is not None and len(arima_pred) > 0:
-                        # 获取ARIMA对应的实际值和预测值
-                        arima_actual, arima_pred_aligned, _ = get_model_specific_data(
-                            "ARIMA", arima_pred, actual_values, dates
-                        )
-                        
-                        if arima_actual is not None and arima_pred_aligned is not None:
-                            errors = np.array(arima_actual) - np.array(arima_pred_aligned)
-                            stats_row = {
-                                "模型": "ARIMA",
-                                "数据点数": len(errors),
-                                "平均误差": f"{np.mean(errors):.4f}",
-                                "误差标准差": f"{np.std(errors):.4f}",
-                                "最大误差": f"{np.max(np.abs(errors)):.4f}",
-                                "误差偏度": f"{stats.skew(errors):.4f}",
-                                "误差峰度": f"{stats.kurtosis(errors):.4f}"
-                            }
-                            error_stats_data.append(stats_row)
-                except Exception as e:
-                    st.warning(f"计算{model}误差统计失败: {e}")
-                    import traceback
-                    st.code(traceback.format_exc())
+                if model in model_info:
+                    metrics = model_info[model]['metrics']
+                    html_content += f"""
+            <p><strong>{model}模型:</strong></p>
+            <ul>
+                <li>RMSE: {metrics.get('RMSE', 'N/A')}</li>
+                <li>MAE: {metrics.get('MAE', 'N/A')}</li>
+                <li>方向准确率: {metrics.get('Direction_Accuracy', 'N/A')}</li>
+            </ul>
+"""
             
-            if error_stats_data:
-                error_stats_df = pd.DataFrame(error_stats_data)
-                # 修复时间戳数据以兼容PyArrow
-                error_stats_df_display = fix_datetime_for_arrow(error_stats_df)
-                st.dataframe(error_stats_df_display, use_container_width=True, hide_index=True)
-            else:
-                st.warning("没有可用的误差统计数据")
-        else:
-            st.warning("没有可用的真实预测数据进行误差分析。请确保已训练模型并有预测结果。")
-
-# 标签页4: 模型诊断
-with eval_tabs[3]:
-    st.header("🧪 模型诊断")
-    
-    if len(selected_models) == 0:
-        st.warning("请在侧边栏选择至少一个模型进行诊断")
-    else:
-        # LSTM模型诊断
-        if "LSTM" in selected_models:
-            st.subheader("🔬 LSTM模型诊断")
-            
-            lstm_diag_col1, lstm_diag_col2 = st.columns(2)
-            
-            with lstm_diag_col1:
-                st.markdown("**学习曲线分析**")
-                
-                # 检查是否有训练历史
-                if 'training_history' in st.session_state:
-                    history = st.session_state['training_history']
-                    if isinstance(history, dict) and 'train_loss' in history:
-                        epochs = list(range(1, len(history['train_loss']) + 1))
-                        
-                        learning_curve_option = {
-                            "title": {
-                                "text": "LSTM学习曲线",
-                                "left": "center",
-                                "textStyle": {"fontSize": 14}
-                            },
-                            "tooltip": {"trigger": "axis"},
-                            "legend": {"data": ["训练损失", "验证损失"]},
-                            "xAxis": {
-                                "type": "category",
-                                "data": epochs,
-                                "name": "Epoch"
-                            },
-                            "yAxis": {"type": "value", "name": "损失"},
-                            "series": [
-                                {
-                                    "name": "训练损失",
-                                    "type": "line",
-                                    "data": history['train_loss'],
-                                    "lineStyle": {"color": "#5470c6"}
-                                },
-                                {
-                                    "name": "验证损失",
-                                    "type": "line",
-                                    "data": history.get('val_loss', []),
-                                    "lineStyle": {"color": "#91cc75"}
-                                }
-                            ]
-                        }
-                        st_echarts(options=learning_curve_option, height="300px")
-                    else:
-                        st.info("没有可用的训练历史数据")
-                else:
-                    st.info("没有可用的训练历史数据")
-            
-            with lstm_diag_col2:
-                st.markdown("**特征重要性分析**")
-                
-                # 生成示例特征重要性数据
-                if 'selected_features' in st.session_state:
-                    features = st.session_state['selected_features'][:10]  # 取前10个特征
-                    np.random.seed(42)
-                    importance_scores = np.random.rand(len(features))
-                    
-                    feature_importance_option = {
-                        "title": {
-                            "text": "特征重要性",
-                            "left": "center",
-                            "textStyle": {"fontSize": 14}
-                        },
-                        "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "value"},
-                        "yAxis": {
-                            "type": "category",
-                            "data": features,
-                            "axisLabel": {"interval": 0}
-                        },
-                        "series": [{
-                            "type": "bar",
-                            "data": importance_scores.tolist(),
-                            "itemStyle": {"color": "#73c0de"}
-                        }]
-                    }
-                    st_echarts(options=feature_importance_option, height="300px")
-                else:
-                    st.info("没有可用的特征数据")
+            html_content += f"""
+        </div>
+        <div class="success">
+            <h3>💡 建议</h3>
+            <ul>
+                <li><strong>推荐模型:</strong> {best_model}</li>
+                <li><strong>应用场景:</strong> 适用于短期价格预测</li>
+                <li><strong>注意事项:</strong> 建议定期重新训练模型以保持预测准确性</li>
+            </ul>
+        </div>
+    </div>
+"""
         
-        # ARIMA模型诊断
-        if "ARIMA" in selected_models:
-            st.subheader("📊 ARIMA模型诊断")
-            
-            arima_diag_col1, arima_diag_col2 = st.columns(2)
-            
-            with arima_diag_col1:
-                st.markdown("**残差自相关检验**")
-                
-                # 使用真实的ARIMA残差数据
-                if 'arima_model' in st.session_state and 'arima_training_result' in st.session_state:
-                    try:
-                        # 从训练结果中获取残差
-                        training_result = st.session_state['arima_training_result']
-                        if 'residuals' in training_result:
-                            residuals = training_result['residuals']
-                            
-                            # 计算残差的自相关函数
-                            from statsmodels.tsa.stattools import acf
-                            lags = 20
-                            acf_values = acf(residuals.dropna(), nlags=lags, fft=False)[1:]  # 排除lag=0
-                            lag_numbers = list(range(1, lags + 1))
-                            
-                            # 计算置信区间
-                            n = len(residuals.dropna())
-                            confidence_interval = 1.96 / np.sqrt(n)
-                            
-                            acf_option = {
-                                "title": {
-                                    "text": "ARIMA残差ACF检验",
-                                    "left": "center",
-                                    "textStyle": {"fontSize": 14}
-                                },
-                                "tooltip": {"trigger": "axis"},
-                                "xAxis": {
-                                    "type": "category",
-                                    "data": lag_numbers,
-                                    "name": "滞后阶数"
-                                },
-                                "yAxis": {
-                                    "type": "value", 
-                                    "name": "自相关系数",
-                                    "min": -0.5,
-                                    "max": 0.5
-                                },
-                                "series": [
-                                    {
-                                        "name": "ACF",
-                                        "type": "bar",
-                                        "data": [float(x) for x in acf_values],
-                                        "itemStyle": {"color": "#fc8452"}
-                                    },
-                                    {
-                                        "name": "置信上限",
-                                        "type": "line",
-                                        "data": [confidence_interval] * len(lag_numbers),
-                                        "lineStyle": {"color": "red", "type": "dashed"},
-                                        "symbol": "none"
-                                    },
-                                    {
-                                        "name": "置信下限",
-                                        "type": "line",
-                                        "data": [-confidence_interval] * len(lag_numbers),
-                                        "lineStyle": {"color": "red", "type": "dashed"},
-                                        "symbol": "none"
-                                    }
-                                ]
-                            }
-                            st_echarts(options=acf_option, height="300px")
-                            
-                            # 显示Ljung-Box检验结果
-                            from statsmodels.stats.diagnostic import acorr_ljungbox
-                            lb_test = acorr_ljungbox(residuals.dropna(), lags=10, return_df=True)
-                            st.markdown("**Ljung-Box检验结果:**")
-                            st.write(f"- 统计量: {lb_test['lb_stat'].iloc[-1]:.4f}")
-                            st.write(f"- p值: {lb_test['lb_pvalue'].iloc[-1]:.4f}")
-                            if lb_test['lb_pvalue'].iloc[-1] > 0.05:
-                                st.success("✅ 残差为白噪声 (p > 0.05)")
-                            else:
-                                st.warning("⚠️ 残差可能不是白噪声 (p ≤ 0.05)")
-                        else:
-                            st.warning("没有可用的ARIMA残差数据")
-                    except Exception as e:
-                        st.error(f"残差自相关分析失败: {e}")
-                        # 如果失败，显示示例数据
-                        lags = list(range(1, 21))
-                        np.random.seed(42)
-                        acf_values = np.random.randn(20) * 0.1
-                        
-                        acf_option = {
-                            "title": {
-                                "text": "残差ACF检验 (示例)",
-                                "left": "center",
-                                "textStyle": {"fontSize": 14}
-                            },
-                            "tooltip": {"trigger": "axis"},
-                            "xAxis": {
-                                "type": "category",
-                                "data": lags,
-                                "name": "滞后阶数"
-                            },
-                            "yAxis": {"type": "value", "name": "自相关系数"},
-                            "series": [{
-                                "type": "bar",
-                                "data": acf_values.tolist(),
-                                "itemStyle": {"color": "#fc8452"}
-                            }]
-                        }
-                        st_echarts(options=acf_option, height="300px")
-                else:
-                    st.info("没有可用的ARIMA模型数据")
-            
-            with arima_diag_col2:
-                st.markdown("**模型参数信息**")
-                
-                if 'arima_model' in st.session_state:
-                    # 显示ARIMA模型参数
-                    st.info("ARIMA模型参数:")
-                    
-                    # 从session state获取ARIMA参数
-                    arima_params = st.session_state.get('arima_model_params', {})
-                    if arima_params:
-                        st.json(arima_params)
-                    else:
-                        st.write("- 模型阶数: (2, 1, 2)")
-                        st.write("- AIC: 1234.56")
-                        st.write("- BIC: 1245.67")
-                        st.write("- 对数似然: -612.28")
-                else:
-                    st.info("没有可用的ARIMA模型信息")
+        # 性能指标
+        if "性能指标" in report_sections:
+            html_content += """
+    <div class="section">
+        <h2>📈 详细性能指标</h2>
+        <table class="metrics-table">
+            <thead>
+                <tr>
+                    <th>模型</th>
+                    <th>状态</th>
+                    <th>MSE</th>
+                    <th>RMSE</th>
+                    <th>MAE</th>
+                    <th>R²</th>
+                    <th>方向准确率</th>
+                </tr>
+            </thead>
+            <tbody>
+"""
+            for model in selected_models:
+                if model in model_info:
+                    metrics = model_info[model]['metrics']
+                    status = model_info[model]['status']
+                    html_content += f"""
+                <tr>
+                    <td><strong>{model}</strong></td>
+                    <td>{status}</td>
+                    <td>{metrics.get('MSE', 'N/A')}</td>
+                    <td>{metrics.get('RMSE', 'N/A')}</td>
+                    <td>{metrics.get('MAE', 'N/A')}</td>
+                    <td>{metrics.get('R²', 'N/A')}</td>
+                    <td>{metrics.get('Direction_Accuracy', 'N/A')}</td>
+                </tr>
+"""
+            html_content += """
+            </tbody>
+        </table>
+    </div>
+"""
+        
+        # 建议和结论
+        if "建议和结论" in report_sections:
+            html_content += """
+    <div class="section">
+        <h2>🎯 建议和结论</h2>
+        
+        <h3>📈 生产环境部署</h3>
+        <ul>
+            <li><strong>首选模型:</strong> 根据综合性能评估选择最佳模型</li>
+            <li><strong>备选方案:</strong> 保留次优模型作为备选</li>
+            <li><strong>监控策略:</strong> 建立模型性能监控机制</li>
+        </ul>
+        
+        <h3>🔄 模型维护</h3>
+        <ul>
+            <li><strong>重训练频率:</strong> 建议每月重新评估模型性能</li>
+            <li><strong>数据更新:</strong> 及时更新训练数据集</li>
+            <li><strong>参数调优:</strong> 根据新数据调整模型参数</li>
+        </ul>
+        
+        <div class="warning">
+            <h3>⚠️ 风险提示</h3>
+            <ul>
+                <li>模型预测存在不确定性，请结合业务判断使用</li>
+                <li>市场环境变化可能影响模型性能</li>
+                <li>建议建立多模型集成策略降低风险</li>
+            </ul>
+        </div>
+    </div>
+"""
+        
+        html_content += """
+    <div class="footer">
+        <p>💡 提示：模型评估结果仅供参考，实际应用时请结合业务场景和专业判断</p>
+        <p>报告由Streamlit债券预测系统自动生成</p>
+    </div>
+</body>
+</html>
+"""
+        return html_content, "html", "text/html"
+    
+    elif report_format == "Markdown":
+        # 生成Markdown格式报告
+        md_content = f"""# 📊 模型评估报告
 
-# 标签页5: 详细报告
-with eval_tabs[4]:
+**生成时间:** {current_time}  
+**评估模型:** {', '.join(selected_models)}  
+**评估期间:** {evaluation_period}  
+**评估指标:** {', '.join(selected_metrics)}
+
+---
+
+"""
+        
+        # 执行摘要
+        if "执行摘要" in report_sections:
+            md_content += """## 📋 执行摘要
+
+### 🎯 主要发现
+
+"""
+            for model in selected_models:
+                if model in model_info:
+                    metrics = model_info[model]['metrics']
+                    md_content += f"""**{model}模型:**
+- RMSE: {metrics.get('RMSE', 'N/A')}
+- MAE: {metrics.get('MAE', 'N/A')}
+- 方向准确率: {metrics.get('Direction_Accuracy', 'N/A')}
+
+"""
+            
+            md_content += f"""### 💡 建议
+
+- **推荐模型:** {best_model}
+- **应用场景:** 适用于短期价格预测
+- **注意事项:** 建议定期重新训练模型以保持预测准确性
+
+---
+
+"""
+        
+        # 性能指标
+        if "性能指标" in report_sections:
+            md_content += """## 📈 详细性能指标
+
+| 模型 | 状态 | MSE | RMSE | MAE | R² | 方向准确率 |
+|------|------|-----|------|-----|----|-----------| 
+"""
+            for model in selected_models:
+                if model in model_info:
+                    metrics = model_info[model]['metrics']
+                    status = model_info[model]['status']
+                    md_content += f"| **{model}** | {status} | {metrics.get('MSE', 'N/A')} | {metrics.get('RMSE', 'N/A')} | {metrics.get('MAE', 'N/A')} | {metrics.get('R²', 'N/A')} | {metrics.get('Direction_Accuracy', 'N/A')} |\n"
+            
+            md_content += "\n---\n\n"
+        
+        # 建议和结论
+        if "建议和结论" in report_sections:
+            md_content += """## 🎯 建议和结论
+
+### 📈 生产环境部署
+- **首选模型:** 根据综合性能评估选择最佳模型
+- **备选方案:** 保留次优模型作为备选
+- **监控策略:** 建立模型性能监控机制
+
+### 🔄 模型维护
+- **重训练频率:** 建议每月重新评估模型性能
+- **数据更新:** 及时更新训练数据集
+- **参数调优:** 根据新数据调整模型参数
+
+### ⚠️ 风险提示
+- 模型预测存在不确定性，请结合业务判断使用
+- 市场环境变化可能影响模型性能
+- 建议建立多模型集成策略降低风险
+
+---
+
+💡 **提示：** 模型评估结果仅供参考，实际应用时请结合业务场景和专业判断
+
+*报告由Streamlit债券预测系统自动生成*
+"""
+        
+        return md_content, "md", "text/markdown"
+    
+    elif report_format == "JSON数据":
+        # 生成JSON格式报告
+        json_report = {
+            "report_metadata": {
+                "generation_time": current_time,
+                "evaluated_models": selected_models,
+                "evaluation_period": evaluation_period,
+                "metrics_used": selected_metrics,
+                "report_sections": report_sections
+            },
+            "executive_summary": {
+                "best_model": best_model,
+                "model_performance": {}
+            },
+            "detailed_metrics": {},
+            "recommendations": {
+                "deployment": {
+                    "preferred_model": best_model,
+                    "backup_strategy": "保留次优模型作为备选",
+                    "monitoring": "建立模型性能监控机制"
+                },
+                "maintenance": {
+                    "retrain_frequency": "每月重新评估模型性能",
+                    "data_updates": "及时更新训练数据集",
+                    "parameter_tuning": "根据新数据调整模型参数"
+                },
+                "risk_warnings": [
+                    "模型预测存在不确定性，请结合业务判断使用",
+                    "市场环境变化可能影响模型性能",
+                    "建议建立多模型集成策略降低风险"
+                ]
+            }
+        }
+        
+        # 添加模型性能数据
+        for model in selected_models:
+            if model in model_info:
+                json_report["executive_summary"]["model_performance"][model] = model_info[model]['metrics']
+                json_report["detailed_metrics"][model] = {
+                    "status": model_info[model]['status'],
+                    "metrics": model_info[model]['metrics']
+                }
+        
+        # 确保JSON可序列化
+        json_report = make_json_serializable(json_report)
+        json_content = json.dumps(json_report, indent=2, ensure_ascii=False)
+        
+        return json_content, "json", "application/json"
+    
+    else:
+        return "不支持的报告格式", "txt", "text/plain"
+
+# 标签页3: 详细报告 (原来是标签页5)
+with eval_tabs[2]:
     st.header("📋 详细评估报告")
     
     # 报告生成选项
@@ -1839,21 +1732,68 @@ with eval_tabs[4]:
             st.success("✅ 报告生成完成！")
             st.balloons()
         
+        # 导出报告按钮
+        if st.button("导出报告", use_container_width=True):
+            try:
+                # 生成报告内容
+                report_content, file_ext, mime_type = generate_evaluation_report(
+                    report_sections=report_sections,
+                    report_format=report_format,
+                    selected_models=selected_models,
+                    selected_metrics=selected_metrics,
+                    model_info=model_info,
+                    best_model=best_model,
+                    evaluation_period=evaluation_period,
+                    include_charts=include_charts
+                )
+                
+                # 生成文件名
+                timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+                filename = f"model_evaluation_report_{timestamp}.{file_ext}"
+                
+                st.download_button(
+                    label=f"下载{report_format}报告",
+                    data=report_content,
+                    file_name=filename,
+                    mime=mime_type,
+                    use_container_width=True
+                )
+                st.success("✅ 报告已准备完成！")
+                
+            except Exception as report_error:
+                st.error(f"生成报告时出错: {report_error}")
+                st.code(f"错误详情: {str(report_error)}")
+                import traceback
+                st.code(traceback.format_exc())
+        
+        # 导出数据按钮
         if st.button("导出数据", use_container_width=True):
-            # 创建导出数据
-            export_data = {
-                "evaluation_date": datetime.now().isoformat(),
-                "models_evaluated": selected_models,
-                "metrics_used": selected_metrics,
-                "model_performance": model_info
-            }
-            
-            st.download_button(
-                label="下载评估数据",
-                data=json.dumps(export_data, indent=2, ensure_ascii=False),
-                file_name=f"model_evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                mime="application/json"
-            )
+            try:
+                # 创建导出数据，确保所有数据都是JSON可序列化的
+                export_data = {
+                    "evaluation_date": datetime.now().isoformat(),
+                    "models_evaluated": selected_models,
+                    "metrics_used": selected_metrics,
+                    "model_performance": make_json_serializable(model_info)
+                }
+                
+                # 转换为JSON字符串
+                json_data = json.dumps(export_data, indent=2, ensure_ascii=False)
+                
+                st.download_button(
+                    label="下载评估数据",
+                    data=json_data,
+                    file_name=f"model_evaluation_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                    mime="application/json",
+                    use_container_width=True
+                )
+                st.success("✅ 导出数据已准备完成！")
+                
+            except Exception as export_error:
+                st.error(f"导出数据时出错: {export_error}")
+                st.code(f"错误详情: {str(export_error)}")
+                import traceback
+                st.code(traceback.format_exc())
     
     # 报告预览
     st.subheader("📄 报告预览")
